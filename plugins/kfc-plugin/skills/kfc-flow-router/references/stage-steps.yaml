@@ -1,0 +1,107 @@
+stages:
+  requirement:
+    next_stage: solution-outline
+    default_steps:
+      - step_id: requirement_discussion
+        default_worker: kfc-worker-requirement-discussion-draft
+        candidate_workers:
+          - kfc-worker-requirement-discussion-draft
+        output_purpose: 把零散需求整理成需求讨论稿。
+      - step_id: lightweight_prd
+        default_worker: kfc-worker-lightweight-prd
+        candidate_workers:
+          - kfc-worker-lightweight-prd
+        output_purpose: 生成可进入概要设计的需求基线。
+      - step_id: requirement_review
+        default_worker: kfc-worker-requirement-review
+        candidate_workers:
+          - kfc-worker-requirement-review
+        output_purpose: 评审需求文档，输出问题、风险和是否可进入概要设计。
+
+  solution-outline:
+    next_stage: detailed-design
+    default_steps:
+      - step_id: solution_outline
+        default_worker: kfc-worker-solution-outline
+        candidate_workers:
+          - kfc-worker-solution-outline
+        output_purpose: 生成概要设计，作为详细设计输入。
+
+  detailed-design:
+    next_stage: task-breakdown
+    default_steps:
+      - step_id: detailed_design
+        default_worker: kfc-worker-detailed-design
+        candidate_workers:
+          - kfc-worker-detailed-design
+        output_purpose: 生成实现级详细设计。
+
+  task-breakdown:
+    next_stage: development-execution
+    default_steps:
+      - step_id: task_breakdown
+        default_worker: kfc-worker-task-breakdown
+        candidate_workers:
+          - kfc-worker-task-breakdown
+        output_purpose: 生成可执行任务包。
+
+  development-execution:
+    next_stage: test-and-selftest
+    default_steps:
+      - step_id: tdd_execution
+        default_worker: kfc-worker-development-execution
+        candidate_workers:
+          - kfc-worker-development-execution
+        output_purpose: 开发类任务固定使用测试先行开发 skill 推进或记录 TDD 过程。
+      - step_id: development_record
+        default_worker: kfc-worker-development-record
+        candidate_workers:
+          - kfc-worker-development-record
+        output_purpose: 记录开发执行结果、改动范围、验证入口和剩余风险。
+
+  test-and-selftest:
+    next_stage: acceptance-guide
+    default_steps:
+      - step_id: automated_verification
+        default_worker: kfc-worker-automated-verification-runner
+        candidate_workers:
+          - kfc-worker-automated-verification-runner
+        output_purpose: 整理或执行自动化验证记录。
+      - step_id: runtime_selftest
+        default_worker: kfc-worker-runtime-selftest-recorder
+        candidate_workers:
+          - kfc-worker-runtime-selftest-recorder
+        output_purpose: 整理真实运行自测记录。
+      - step_id: code_review
+        default_worker: kfc-worker-code-review
+        candidate_workers:
+          - kfc-worker-code-review
+        output_purpose: 对实现 diff 做默认且必走的代码审查。
+      - step_id: security_review
+        default_worker: kfc-worker-security-review
+        candidate_workers:
+          - kfc-worker-security-review
+        output_purpose: 开发类任务固定执行安全审查或记录无法执行原因。
+      - step_id: review_readiness_packaging
+        default_worker: kfc-worker-review-readiness-packager
+        candidate_workers:
+          - kfc-worker-review-readiness-packager
+        output_purpose: 整理人工复核准备材料。
+
+  acceptance-guide:
+    next_stage: acceptance-feedback
+    default_steps:
+      - step_id: acceptance_guide
+        default_worker: kfc-worker-acceptance-guide
+        candidate_workers:
+          - kfc-worker-acceptance-guide
+        output_purpose: 生成验收指南。
+
+  acceptance-feedback:
+    next_stage: null
+    default_steps:
+      - step_id: acceptance_feedback_resolution
+        default_worker: kfc-worker-acceptance-feedback-resolution
+        candidate_workers:
+          - kfc-worker-acceptance-feedback-resolution
+        output_purpose: 整理验收反馈处理结论和回流路径。

@@ -1,0 +1,56 @@
+dependency_packages:
+
+stages:
+  requirement:
+    skills:
+      - name: kfc-worker-requirement-discussion-draft
+        summary: 生成需求讨论稿。
+      - name: kfc-worker-lightweight-prd
+        summary: 生成轻量 PRD。
+      - name: kfc-worker-requirement-review
+        summary: 需求文档评审 skill。
+
+  solution-outline:
+    skills:
+      - name: kfc-worker-solution-outline
+        summary: 生成概要设计。
+
+  detailed-design:
+    skills:
+      - name: kfc-worker-detailed-design
+        summary: 生成实现级详细设计。
+
+  task-breakdown:
+    skills:
+      - name: kfc-worker-task-breakdown
+        summary: 生成任务拆分和任务包。
+
+  development-execution:
+    skills:
+      - name: kfc-worker-development-execution
+        summary: 开发类任务固定使用的测试先行开发 skill。
+      - name: kfc-worker-development-record
+        summary: KFC 内置开发执行记录 skill，不负责实际编码。
+
+  test-and-selftest:
+    skills:
+      - name: kfc-worker-automated-verification-runner
+        summary: 整理或执行自动化验证记录。
+      - name: kfc-worker-runtime-selftest-recorder
+        summary: 整理真实运行自测记录。
+      - name: kfc-worker-code-review
+        summary: 默认且必走的代码审查 skill。
+      - name: kfc-worker-security-review
+        summary: 开发类任务固定使用的安全审查 skill。
+      - name: kfc-worker-review-readiness-packager
+        summary: 整理人工复核准备材料。
+
+  acceptance-guide:
+    skills:
+      - name: kfc-worker-acceptance-guide
+        summary: 生成验收指南。
+
+  acceptance-feedback:
+    skills:
+      - name: kfc-worker-acceptance-feedback-resolution
+        summary: 整理验收反馈处理结论。

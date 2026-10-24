@@ -1,0 +1,8 @@
+{
+  "name": "kaleidosphere",
+  "version": "0.4.2",
+  "description": "A plugin-based AI work resource coordination layer for human-agent collaboration.",
+  "author": {
+    "name": "cctice"
+  }
+}

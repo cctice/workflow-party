@@ -1,0 +1,18 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "kaleidosphere",
+  "version": "0.4.2",
+  "description": "A plugin-based AI work resource coordination layer for human-agent collaboration.",
+  "keywords": [
+    "kaleidosphere",
+    "ks",
+    "project assets",
+    "project worksites",
+    "sparks",
+    "execution coordination",
+    "agent collaboration"
+  ],
+  "author": {
+    "name": "cctice"
+  }
+}
