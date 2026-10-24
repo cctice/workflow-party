@@ -1,0 +1,43 @@
+{
+  "name": "workflow-party",
+  "plugins": [
+    {
+      "name": "kaleidosphere",
+      "version": "0.4.2",
+      "description": "A plugin-based AI work resource coordination layer for human-agent collaboration.",
+      "author": {
+        "name": "cctice"
+      },
+      "source": "./plugins/kaleidosphere",
+      "category": "developer-tools"
+    },
+    {
+      "name": "kfc-plugin",
+      "version": "0.1.1",
+      "description": "Personal KFC workflow coordinator with local state and worker registry.",
+      "author": {
+        "name": "cctice"
+      },
+      "source": "./plugins/kfc-plugin",
+      "category": "developer-tools"
+    },
+    {
+      "name": "afk",
+      "version": "0.1.0",
+      "description": "AFK — AI Flow Kit. A self-contained local workflow engine that routes tasks through requirement, design, implementation, verification and delivery, with AI self-test and self-fix loops. Away From Keyboard.",
+      "author": {
+        "name": "cctice"
+      },
+      "source": "https://github.com/cctice/kaleidosphere/tree/master/plugins/afk/",
+      "category": "developer-tools",
+      "bundled-in-kaleidosphere": true
+    }
+  ],
+  "owner": {
+    "name": "cctice"
+  },
+  "metadata": {
+    "description": "Personal agent workflow marketplace maintained by cctice.",
+    "version": "0.1.2"
+  }
+}

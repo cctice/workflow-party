@@ -1,0 +1,21 @@
+{
+  "name": "kfc-plugin",
+  "version": "0.1.1",
+  "description": "Personal KFC workflow coordinator with local state and worker registry.",
+  "author": {
+    "name": "cctice"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "KFC Personal Plugin",
+    "shortDescription": "Local workflow coordination for personal development projects.",
+    "longDescription": "Routes personal development work through local stages, records artifacts, and keeps worker registration in a personal configuration directory.",
+    "developerName": "cctice",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": "Use KFC Personal Plugin to orient this personal project and record the current workflow stage."
+  }
+}

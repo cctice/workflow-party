@@ -1,0 +1,45 @@
+{
+  "name": "workflow-party",
+  "interface": {
+    "displayName": "Workflow Party"
+  },
+  "plugins": [
+    {
+      "name": "kaleidosphere",
+      "source": {
+        "source": "local",
+        "path": "./plugins/kaleidosphere"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
+      "name": "kfc-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugins/kfc-plugin"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
+      "name": "afk",
+      "source": {
+        "source": "github",
+        "path": "https://github.com/cctice/kaleidosphere/tree/master/plugins/afk/"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools",
+      "bundled-in-kaleidosphere": true
+    }
+  ]
+}
