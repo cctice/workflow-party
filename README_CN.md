@@ -30,8 +30,8 @@ kaleidosphere（产品仓，0.4.2）              workflow-party（本仓，市�
 
 | 条目 | 版本 | 来源 | 备注 |
 | --- | --- | --- | --- |
-| kaleidosphere | 0.4.2 | `./plugins/kaleidosphere` | 已验证产物 `resources/kaleidosphere-0.4.2.tgz` |
-| kfc-plugin | 0.1.1 | `./plugins/kfc-plugin` | 已验证产物 `resources/kfc-plugin-0.1.1.tgz` |
+| kaleidosphere | 0.4.2 | `./plugins/kaleidosphere` | 已验证产物 `plugins/kaleidosphere/resources/kaleidosphere-0.4.2.tgz` |
+| kfc-plugin | 0.1.1 | `./plugins/kfc-plugin` | 已验证产物 `plugins/kfc-plugin/resources/kfc-plugin-0.1.1.tgz` |
 | afk | 0.1.0 | `cctice/kaleidosphere` → `plugins/afk/` | bundled-in-kaleidosphere；仅作发现入口 |
 
 `afk` 作为万花镜内置的工作流引擎随其分发。市场为它建立发现条目，指向

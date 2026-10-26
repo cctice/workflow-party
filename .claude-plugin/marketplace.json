@@ -9,7 +9,8 @@
         "name": "cctice"
       },
       "source": "./plugins/kaleidosphere",
-      "category": "developer-tools"
+      "category": "developer-tools",
+      "integrity": "sha256:7d365a58d2d565c6ea7f30a0e57b80a24e0e5198cdf222efd6d8435f8bb33ee3"
     },
     {
       "name": "kfc-plugin",
@@ -19,7 +20,8 @@
         "name": "cctice"
       },
       "source": "./plugins/kfc-plugin",
-      "category": "developer-tools"
+      "category": "developer-tools",
+      "integrity": "sha256:b6f510e0d41505b0288f639d87b5a88ef05abc3d31d7e1bea1ed82d87e91a687"
     },
     {
       "name": "afk",
@@ -38,6 +40,6 @@
   },
   "metadata": {
     "description": "Personal agent workflow marketplace maintained by cctice.",
-    "version": "0.1.2"
+    "version": "0.1.3"
   }
 }
