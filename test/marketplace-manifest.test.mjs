@@ -97,8 +97,8 @@ test("plugin parity: both manifests list the same names, with no duplicates", ()
   assert.deepEqual(indexNames, ["afk", "kaleidosphere", "kfc-plugin"]);
 });
 
-test("marketplace metadata: index metadata.version is a semver bump (0.1.2)", () => {
+test("marketplace metadata: index metadata.version is a semver bump (0.1.3)", () => {
   assert.ok(index.metadata && index.metadata.version);
   assert.match(index.metadata.version, SEMVER);
-  assert.equal(index.metadata.version, "0.1.2");
+  assert.equal(index.metadata.version, "0.1.3");
 });
