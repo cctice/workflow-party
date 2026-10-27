@@ -10,7 +10,7 @@
       },
       "source": "./plugins/kaleidosphere",
       "category": "developer-tools",
-      "integrity": "sha256:7d365a58d2d565c6ea7f30a0e57b80a24e0e5198cdf222efd6d8435f8bb33ee3"
+      "integrity": "sha256:2853054b9b91385b160addba21a02d57320113807867e1318efa10009278bd63"
     },
     {
       "name": "kfc-plugin",
@@ -21,7 +21,7 @@
       },
       "source": "./plugins/kfc-plugin",
       "category": "developer-tools",
-      "integrity": "sha256:b6f510e0d41505b0288f639d87b5a88ef05abc3d31d7e1bea1ed82d87e91a687"
+      "integrity": "sha256:4632fbe0e678e191e68398ee2b400acbf5dacf40293e965ee8070794f58ce7b7"
     },
     {
       "name": "afk",
