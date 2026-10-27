@@ -1,0 +1,11 @@
+{
+  "name": "kaleidosphere",
+  "version": "0.4.2",
+  "description": "A plugin-based AI work resource coordination layer for human-agent collaboration.",
+  "author": {
+    "name": "cctice"
+  },
+  "skills": "./skills/",
+  "category": "developer-tools",
+  "source-of-truth": "本文件是市场索引版本的唯一真源：升版本先改这里，再按 docs/release-runbook.md 重建产物与双清单"
+}
