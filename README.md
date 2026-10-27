@@ -1,6 +1,6 @@
 # Workflow Party (Marketplace)
 
-[![version](https://img.shields.io/badge/version-0.1.3-22d3EE)](https://github.com/cctice/workflow-party) [![license](https://img.shields.io/badge/license-MIT-3B82F6)](https://github.com/cctice/workflow-party/blob/master/LICENSE) [![tests](https://img.shields.io/badge/tests-13%20passing-brightgreen)](https://github.com/cctice/workflow-party) [![plugins](https://img.shields.io/badge/plugins-3_listed-8B5CF6)](https://github.com/cctice/workflow-party/blob/master/.claude-plugin/marketplace.json)
+[![version](https://img.shields.io/badge/version-0.1.3-22d3EE)](https://github.com/cctice/workflow-party) [![license](https://img.shields.io/badge/license-MIT-3B82F6)](https://github.com/cctice/workflow-party/blob/master/LICENSE) [![tests](https://img.shields.io/badge/tests-16%20passing-brightgreen)](https://github.com/cctice/workflow-party) [![plugins](https://img.shields.io/badge/plugins-3_listed-8B5CF6)](https://github.com/cctice/workflow-party/blob/master/.claude-plugin/marketplace.json)
 
 Personal agent workflow marketplace maintained by cctice. This repository
 keeps the marketplace index and verified release artifacts; plugin sources
