@@ -1,0 +1,29 @@
+# CI — Workflow Party（市场仓）
+# 零依赖仓：无需 npm install；9 个 node:test 用例已含市场双清单校验
+# （.claude-plugin/marketplace.json 索引版 + .agents/plugins/marketplace.json agents 版）。
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: node --test (marketplace dual-manifest validation)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # 零依赖（package.json 无 dependencies）：直接内建测试器跑市场清单校验用例
+      - name: Tests (9 cases — dual marketplace manifests + verified artifacts)
+        run: node --test test/*.test.mjs
