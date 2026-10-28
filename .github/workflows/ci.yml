@@ -1,6 +1,10 @@
 # CI — Workflow Party（市场仓）
-# 零依赖仓：无需 npm install；9 个 node:test 用例已含市场双清单校验
+# 零依赖仓：无需 npm install；node:test 用例已含市场双清单校验
 # （.claude-plugin/marketplace.json 索引版 + .agents/plugins/marketplace.json agents 版）。
+# 多 Node 版本矩阵（维护心跳包·五轮）：此前仅 Node 22 单环境，20/24 未验证过——
+#   现在 20/22/24 三点全跑；engines 下限（>=20.10）与矩阵一致性由
+#   test/node-support.test.mjs 看守（.nvmrc/engines/ci.yml 三点一线）。
+# 注：本文件仅本地保留（token 无 workflow scope，推送跳过该路径——沿 7dc501c 先例）。
 name: CI
 
 on:
@@ -13,17 +17,21 @@ permissions:
 
 jobs:
   test:
-    name: node --test (marketplace dual-manifest validation)
+    name: node --test (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node 22
+      - name: Setup Node ${{ matrix.node }}
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
 
-      # 零依赖（package.json 无 dependencies）：直接内建测试器跑市场清单校验用例
-      - name: Tests (9 cases — dual marketplace manifests + verified artifacts)
+      # 零依赖（package.json 无 dependencies）：直接内建测试器跑市场校验用例
+      - name: Tests (dual manifests + artifacts + discovery + node-support gates)
         run: node --test test/*.test.mjs
