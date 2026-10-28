@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "note": "发布产物来源台账（产物信任链补录）：指纹机制是三轮后才补的，此前的历史产物没有'从哪个源、什么状态构建'的记录——信任链是补出来的。本台账给每个本地产物补上来源与指纹锚点，scripts/verify-artifacts.mjs 一键复验（文件↔双清单↔台账三方对账）。",
+  "artifacts": [
+    {
+      "plugin": "kaleidosphere",
+      "version": "0.4.2",
+      "artifact": "plugins/kaleidosphere/resources/kaleidosphere-0.4.2.tgz",
+      "sha256": "sha256:2853054b9b91385b160addba21a02d57320113807867e1318efa10009278bd63",
+      "source": "./plugins/kaleidosphere",
+      "sourceRepo": "cctice/kaleidosphere",
+      "builtFrom": "kaleidosphere 源仓 plugin.json 版本 0.4.2 同步构建（tgz 内 plugin.json name+version 与市场条目一致，见 test/artifact-integrity.test.mjs 内容级校验）",
+      "recordedAt": "2026-10-28"
+    },
+    {
+      "plugin": "kfc-plugin",
+      "version": "0.1.1",
+      "artifact": "plugins/kfc-plugin/resources/kfc-plugin-0.1.1.tgz",
+      "sha256": "sha256:4632fbe0e678e191e68398ee2b400acbf5dacf40293e965ee8070794f58ce7b7",
+      "source": "./plugins/kfc-plugin",
+      "sourceRepo": "cctice/workflow-party（本仓内源目录）",
+      "builtFrom": "plugins/kfc-plugin 源目录构建（plugin.json 版本 0.1.1，tgz 内容级校验同上）",
+      "recordedAt": "2026-10-28"
+    }
+  ]
+}
