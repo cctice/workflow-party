@@ -6,6 +6,11 @@
   "license": "MIT",
   "type": "commonjs",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "verify:artifacts": "node scripts/verify-artifacts.mjs",
+    "market": "node scripts/market.mjs"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
