@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -73,7 +73,7 @@ export function verifyAll(repoRoot = root) {
 }
 
 // ---- CLI 直跑 ----
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const issues = verifyAll();
   if (issues.length === 0) {
     console.log("✓ 产物信任链对账全绿：tgz 实文件 ↔ 双市场清单 ↔ provenance 台账");
