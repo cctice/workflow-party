@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "note": "市场下载量台账：数据由安装/发放侧经 scripts/market.mjs bump <name> 回填（首次接入种子为 0，诚实起步）；key 为 插件名@版本，与市场清单条目一一对应（漂移门看守）。",
+  "updatedAt": "2026-10-20",
+  "counts": {
+    "kaleidosphere@0.4.2": 0,
+    "kfc-plugin@0.1.1": 0
+  }
+}
