@@ -6,7 +6,7 @@
 //
 // 用法：
 //   node scripts/market.mjs list [--category developer-tools] [--sort name|downloads] [--json]
-//   node scripts/market.mjs search <关键词...> [--json]     # 名称/描述/分类 不区分大小写子串
+//   node scripts/market.mjs search <关键词...> [--json]     # 分词+相关度评分（name>category>description，多词 AND）
 //   node scripts/market.mjs info <name> [--json]            # 条目 + 下载量 + 来源
 //   node scripts/market.mjs stats [--json]                  # 下载量台账全量
 //   node scripts/market.mjs bump <name> [--by N]            # 安装/发放回填下载量（默认 +1）
@@ -38,13 +38,68 @@ export function loadCatalog(repoRoot = root) {
   };
 }
 
-/** 关键词搜索：name/description/category 不区分大小写子串匹配，按下载量降序再按名称 */
+/** 关键词搜索：分词 + 相关度评分（八轮升级，替代纯子串匹配）
+ *
+ * 评分模型（可解释、零依赖）：
+ *   - 查询按空白分词，多 token 是 AND 语义（每个 token 都要有贡献才命中）；
+ *   - 字段权重 name(6) > category(4) > description(2)——"查名字"最该排前；
+ *   - 每字段两种贡献：整词命中（词边界全等）拿满权重，子串命中拿一半；
+ *   - 罕见 token 信息量更高：命中同一 token 的插件越少，贡献 × 逆文档频放大；
+ *   - 相关度优先，下载量只做同分 tie-break——命中质量不再被热度淹没。
+ */
+const FIELD_WEIGHTS = [
+  ["name", 6],
+  ["category", 4],
+  ["description", 2],
+];
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function tokenHitsField(text, token) {
+  if (!text) return 0; // 0=不命中 1=子串 2=整词
+  return new RegExp(`\\b${escapeRe(token)}\\b`).test(text) ? 2 : text.includes(token) ? 1 : 0;
+}
+
+/** 单条目打分：任一 token 零贡献即出局（AND 语义），返回 {score, fields} 或 null */
+export function scoreEntry(entry, tokens, idf) {
+  let score = 0;
+  const fields = new Set();
+  for (const token of tokens) {
+    let tokenScore = 0;
+    for (const [field, weight] of FIELD_WEIGHTS) {
+      const level = tokenHitsField(String(entry[field] || "").toLowerCase(), token);
+      if (level > 0) {
+        tokenScore = Math.max(tokenScore, level === 2 ? weight : weight / 2);
+        fields.add(field);
+      }
+    }
+    if (tokenScore === 0) return null;
+    score += tokenScore * (idf.get(token) ?? 1);
+  }
+  return { score: Math.round(score * 100) / 100, fields: [...fields] };
+}
+
+/** 关键词搜索：分词相关度排序（同分按下载量/名称 tie-break），结果携带 score/fields */
 export function searchPlugins(catalog, query) {
-  const q = String(query || "").trim().toLowerCase();
-  if (!q) return [];
+  const tokens = String(query || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return [];
+  // 逆文档频：命中插件少的 token 更值钱（log 缩放；零命中 token idf=1，反正过不了 AND 门）
+  const total = Math.max(catalog.entries.length, 1);
+  const idf = new Map(
+    tokens.map((t) => {
+      const df = catalog.entries.filter((e) =>
+        FIELD_WEIGHTS.some(([f]) => tokenHitsField(String(e[f] || "").toLowerCase(), t) > 0)
+      ).length;
+      return [t, df === 0 ? 1 : 1 + Math.log(total / df)];
+    })
+  );
   return catalog.entries
-    .filter((p) => [p.name, p.description, p.category].some((f) => String(f || "").toLowerCase().includes(q)))
-    .sort(cmpDownloads);
+    .map((entry) => {
+      const s = scoreEntry(entry, tokens, idf);
+      return s ? { ...entry, score: s.score, fields: s.fields } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => (b.score - a.score) || cmpDownloads(a, b));
 }
 
 const cmpDownloads = (a, b) => (b.downloads - a.downloads) || a.name.localeCompare(b.name);
@@ -87,6 +142,7 @@ function parseArgs(argv) {
 }
 
 const render = (p) => `${p.name}@${p.version}  [${p.category}]  ↓${p.downloads}  ${p.description?.slice(0, 60) || ""}`;
+const renderScored = (p) => `${render(p)}  score=${p.score}(${p.fields.join("+")})`;
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const [cmd, ...rest] = process.argv.slice(2);
@@ -100,7 +156,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   } else if (cmd === "search") {
     const items = searchPlugins(catalog, pos.join(" "));
     if (flags.json) console.log(JSON.stringify(items, null, 2));
-    else if (items.length) items.forEach((p) => console.log(render(p)));
+    else if (items.length) items.forEach((p) => console.log(renderScored(p)));
     else console.log(`未命中：${pos.join(" ")}`);
   } else if (cmd === "info") {
     const p = catalog.entries.find((e) => e.name === pos[0]);
