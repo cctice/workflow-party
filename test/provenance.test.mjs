@@ -41,8 +41,8 @@ test("台账来源字段齐备（sourceRepo/builtFrom/recordedAt 一个不能少
   }
 });
 
-test("台账无死记录：登记的条目市场清单里都存在", () => {
-  const listed = new Set(localEntries.map((p) => `${p.name}@${p.version}`));
+test("台账无死记录：登记的条目市场清单里都存在（九轮起 bundled 声明同入册）", () => {
+  const listed = new Set(index.plugins.map((p) => `${p.name}@${p.version}`));
   for (const key of ledger.keys()) {
     assert.ok(listed.has(key), `${key} 是台账死记录`);
   }
