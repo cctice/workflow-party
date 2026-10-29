@@ -23,6 +23,18 @@
       "builtFrom": "scripts/rebuild-artifacts.mjs 脚本化重建：源 plugin.json 版本 0.1.1 同步构建（staging 载荷 plugin.json+README.md+skills）",
       "recordedAt": "2026-10-28",
       "rebuiltAt": "2026-10-29"
+    },
+    {
+      "plugin": "afk",
+      "version": "0.1.0",
+      "form": "bundled",
+      "bundledIn": "kaleidosphere@0.4.2",
+      "bundledPath": "plugins/afk",
+      "sha256": "sha256-tree:327ea8349b0d2db5d822775ac907b7e45fca267810a9dc70413ee6bb2b72958a",
+      "source": "https://github.com/cctice/kaleidosphere/tree/master/plugins/afk/",
+      "sourceRepo": "cctice/kaleidosphere",
+      "builtFrom": "bundled 形态（无独立 tgz）：指纹=源仓 plugins/afk 目录树指纹（sorted 相对路径+文件 sha256），verify-artifacts 源仓在场即现算复验",
+      "recordedAt": "2026-10-29"
     }
   ]
 }
