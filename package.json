@@ -8,7 +8,8 @@
   "scripts": {
     "test": "node --test",
     "verify:artifacts": "node scripts/verify-artifacts.mjs",
-    "market": "node scripts/market.mjs"
+    "market": "node scripts/market.mjs",
+    "rebuild:artifacts": "node scripts/rebuild-artifacts.mjs"
   },
   "engines": {
     "node": ">=20"
