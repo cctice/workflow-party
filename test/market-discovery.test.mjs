@@ -36,6 +36,39 @@ test("搜索：空查询与未命中都返回空（不编造结果）", () => {
   assert.deepEqual(searchPlugins(catalog, "不存在的插件xyz"), []);
 });
 
+test("评分：名称整词命中 > 描述命中（字段权重可解释，结果带 score/fields）", () => {
+  const hits = searchPlugins(catalog, "kaleidosphere");
+  assert.equal(hits[0].name, "kaleidosphere");
+  assert.ok(hits[0].fields.includes("name"));
+  assert.ok(hits[0].score > 0);
+  // "coordination" 只在描述里（权重 2），名称命中者的分必须更高
+  const descHit = searchPlugins(catalog, "coordination")[0];
+  assert.ok(descHit.fields.includes("description"));
+  assert.ok(hits[0].score > descHit.score, `名称命中 ${hits[0].score} 应高于描述命中 ${descHit.score}`);
+});
+
+test("评分：多 token 是 AND 语义——缺 token 的条目不出席", () => {
+  assert.ok(searchPlugins(catalog, "workflow").length >= 2, "前置：workflow 独立命中至少两条");
+  const hits = searchPlugins(catalog, "personal workflow");
+  assert.ok(hits.some((p) => p.name === "kfc-plugin"));
+  assert.ok(!hits.some((p) => p.name === "afk"), "afk 缺 personal token，AND 语义应出局");
+});
+
+test("评分：同分下载量 tie-break；稀有 token 单条贡献高于公共 token", () => {
+  const byTools = searchPlugins(catalog, "tools"); // 三条目 category 整词命中 → 同分
+  assert.equal(byTools.length, catalog.entries.length);
+  for (let i = 1; i < byTools.length; i++) {
+    assert.ok(
+      byTools[i - 1].score > byTools[i].score ||
+        (byTools[i - 1].score === byTools[i].score && byTools[i - 1].downloads >= byTools[i].downloads),
+      "排序必须分值降序、同分下载量降序"
+    );
+  }
+  const rare = searchPlugins(catalog, "kaleidosphere")[0].score;
+  const common = searchPlugins(catalog, "tools")[0].score;
+  assert.ok(rare > common, `稀有 token 贡献 ${rare} 应高于公共 token ${common}（逆文档频）`);
+});
+
 test("分类过滤：developer-tools 全量在列，错误分类为空", () => {
   assert.equal(listPlugins(catalog, { category: "developer-tools" }).length, catalog.entries.length);
   assert.deepEqual(listPlugins(catalog, { category: "no-such-cat" }), []);
