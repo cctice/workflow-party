@@ -110,9 +110,17 @@ test("bump 回填：+N 持久化并刷新 updatedAt（临时根，不动真台�
 });
 
 test("CLI 冒烟：search/info/stats 子命令真实进程跑通", () => {
-  const run = (args) => execFileSync(process.execPath, [path.join(root, "scripts", "market.mjs"), ...args], { encoding: "utf8" });
+  // 九轮起 search 落查询热度账（stats/queries.jsonl）：冒烟改打 WFP_ROOT 临时根，不污染真台账
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wfp-smoke-"));
+  fs.mkdirSync(path.join(tmp, ".claude-plugin"), { recursive: true });
+  fs.mkdirSync(path.join(tmp, "stats"), { recursive: true });
+  fs.copyFileSync(path.join(root, ".claude-plugin", "marketplace.json"), path.join(tmp, ".claude-plugin", "marketplace.json"));
+  fs.copyFileSync(path.join(root, "stats", "downloads.json"), path.join(tmp, "stats", "downloads.json"));
+  const run = (args) => execFileSync(process.execPath, [path.join(root, "scripts", "market.mjs"), ...args],
+    { encoding: "utf8", env: { ...process.env, WFP_ROOT: tmp } });
   assert.match(run(["search", "kfc"]), /kfc-plugin/);
   assert.match(run(["info", "kaleidosphere"]), /kaleidosphere@/);
   assert.match(run(["stats"]), /kaleidosphere@0\.4\.2/);
   assert.match(run(["list", "--category", "developer-tools"]), /kfc-plugin/);
+  fs.rmSync(tmp, { recursive: true, force: true });
 });

@@ -13,6 +13,7 @@
 //   node scripts/market.mjs record <name> [--consumer ks]   # 安装事件回传（九轮）：追加 events.jsonl 并当场归账
 //   node scripts/market.mjs ingest                          # 归账待处理事件（seq 水位幂等，重跑不多记）
 //   node scripts/market.mjs feedback <name> <text> [--kind bug|idea|review]  # 反馈通道（九轮）：脱敏+本地留档+issue 预填
+//   node scripts/market.mjs report [--json]                 # 聚合报表（九轮）：下载量榜/份额/搜索热度
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -218,6 +219,59 @@ export function submitFeedback(repoRoot, name, text, { kind = "review" } = {}) {
   return { record, url };
 }
 
+// ---- 聚合报表（九轮）：下载量/搜索热度从台账到运营视角 ----
+// 痛点：发现机制有了，但"什么被需要"看不到——榜单/份额/零下载如实点名。
+// 搜索热度：CLI search 每次落 stats/queries.jsonl（WFP_ROOT 注入下写临时根），
+// report 聚合 top 查询与每查询的冠军插件。
+
+const queriesPath = (repoRoot) => path.join(repoRoot, "stats", "queries.jsonl");
+
+export function logQuery(repoRoot, query) {
+  const q = String(query || "").trim();
+  if (!q) return;
+  fs.mkdirSync(path.dirname(queriesPath(repoRoot)), { recursive: true });
+  fs.appendFileSync(queriesPath(repoRoot), JSON.stringify({ q, at: new Date().toISOString() }) + "\n");
+}
+
+function topQueries(repoRoot, limit = 5) {
+  let lines = [];
+  try { lines = fs.readFileSync(queriesPath(repoRoot), "utf8").split("\n").filter(Boolean); } catch { return []; }
+  const counts = new Map();
+  for (const l of lines) {
+    try { const { q } = JSON.parse(l); counts.set(q, (counts.get(q) ?? 0) + 1); } catch { /* 坏行跳过 */ }
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, limit);
+}
+
+/** 聚合报表：下载总量/份额榜/版本摊薄/搜索热度（零下载如实点名，不灌水） */
+export function buildReport(catalog, repoRoot = root, { topN = 5 } = {}) {
+  const byName = new Map(catalog.entries.map((e) => [e.name, e]));
+  const versionSpread = new Map(); // name -> {version: count}
+  for (const [key, n] of Object.entries(catalog.downloadsRaw)) {
+    const [name, ver] = key.split("@");
+    if (!byName.has(name)) continue; // 死 key 由台账覆盖门看守，报表不重复执法
+    const spread = versionSpread.get(name) ?? new Map();
+    spread.set(ver, n);
+    versionSpread.set(name, spread);
+  }
+  const total = catalog.entries.reduce((s, e) => s + e.downloads, 0);
+  const leaderboard = [...catalog.entries]
+    .sort((a, b) => b.downloads - a.downloads || a.name.localeCompare(b.name))
+    .map((e, i) => {
+      const spread = versionSpread.get(e.name) ?? new Map([[e.version, e.downloads]]);
+      return {
+        rank: i + 1,
+        plugin: `${e.name}@${e.version}`,
+        downloads: e.downloads,
+        share: total === 0 ? 0 : Math.round((e.downloads / total) * 1000) / 10,
+        versions: [...spread.entries()].map(([v, n]) => `${v}:${n}`),
+        bundled: Boolean(e["bundled-in-kaleidosphere"]),
+      };
+    });
+  const heat = topQueries(repoRoot, topN).map(([q, n]) => ({ query: q, searches: n, topHit: searchPlugins(catalog, q)[0]?.name ?? null }));
+  return { total, zeroDownload: leaderboard.filter((r) => r.downloads === 0).map((r) => r.plugin), leaderboard, heat };
+}
+
 // ---- CLI ----
 function parseArgs(argv) {
   const flags = {};
@@ -245,6 +299,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     else if (items.length) items.forEach((p) => console.log(render(p)));
     else console.log("(空)");
   } else if (cmd === "search") {
+    logQuery(root, pos.join(" ")); // 搜索热度采集（九轮报表数据面；WFP_ROOT 下写临时根）
     const items = searchPlugins(catalog, pos.join(" "));
     if (flags.json) console.log(JSON.stringify(items, null, 2));
     else if (items.length) items.forEach((p) => console.log(renderScored(p)));
@@ -277,8 +332,19 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     if (!fb) { console.error(`未找到插件：${pos[0]}`); process.exit(1); }
     console.log(`已留档（已脱敏）：${fb.record.text}`);
     console.log(`提交 issue：${fb.url}`);
+  } else if (cmd === "report") {
+    const report = buildReport(catalog, root);
+    if (flags.json) console.log(JSON.stringify(report, null, 2));
+    else {
+      console.log(`下载总量 ${report.total}（零下载：${report.zeroDownload.join("、") || "无"}）`);
+      report.leaderboard.forEach((r) => console.log(`#${r.rank} ${r.plugin}  ↓${r.downloads}  share=${r.share}%${r.bundled ? "  [bundled]" : ""}`));
+      if (report.heat.length) {
+        console.log("搜索热度：");
+        report.heat.forEach((h) => console.log(`  ${h.searches}×  "${h.query}" → ${h.topHit ?? "无命中"}`));
+      } else console.log("搜索热度：暂无查询记录（数据面如实起步）");
+    }
   } else {
-    console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N] | record <name> [--consumer c] | ingest | feedback <name> <text> [--kind bug|idea|review]");
+    console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N] | record <name> [--consumer c] | ingest | feedback <name> <text> [--kind bug|idea|review] | report [--json]");
     process.exit(cmd ? 1 : 0);
   }
 }
