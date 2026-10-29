@@ -12,6 +12,7 @@
 //   node scripts/market.mjs bump <name> [--by N]            # 安装/发放回填下载量（默认 +1，手工形态）
 //   node scripts/market.mjs record <name> [--consumer ks]   # 安装事件回传（九轮）：追加 events.jsonl 并当场归账
 //   node scripts/market.mjs ingest                          # 归账待处理事件（seq 水位幂等，重跑不多记）
+//   node scripts/market.mjs feedback <name> <text> [--kind bug|idea|review]  # 反馈通道（九轮）：脱敏+本地留档+issue 预填
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -183,13 +184,47 @@ export function ingestEvents(repoRoot) {
   return pending.filter((e) => e.type === "install").length;
 }
 
+// ---- 反馈通道（九轮）：gatt 仓 issue 预填先例的市场版 ----
+// 脱敏（邮箱/绝对路径/长十六进制串即令牌形态）→ 本地留档 stats/feedback.jsonl →
+// 打印 GitHub issue 预填 URL（上架当天反馈即有去处，不用先建服务）。
+
+const REDACTIONS = [
+  [/[\w.+-]+@[\w-]+\.[\w.]+/g, "[email]"],
+  [/\/(?:Users|home)\/[\w.\/-]+/g, "[path]"],
+  [/\b[0-9a-f]{16,}\b/gi, "[token]"],
+];
+
+export function redactText(text) {
+  return REDACTIONS.reduce((t, [re, tag]) => t.replace(re, tag), String(text || ""));
+}
+
+/** 反馈三件套：脱敏正文 + 本地留档 + issue 预填 URL（未知名 → null） */
+export function submitFeedback(repoRoot, name, text, { kind = "review" } = {}) {
+  const index = JSON.parse(fs.readFileSync(path.join(repoRoot, ".claude-plugin", "marketplace.json"), "utf8"));
+  const entry = index.plugins.find((p) => p.name === name);
+  if (!entry) return null;
+  const record = {
+    at: new Date().toISOString(),
+    plugin: `${entry.name}@${entry.version}`,
+    kind,
+    text: redactText(text),
+  };
+  const fbPath = path.join(repoRoot, "stats", "feedback.jsonl");
+  fs.mkdirSync(path.dirname(fbPath), { recursive: true });
+  fs.appendFileSync(fbPath, JSON.stringify(record) + "\n");
+  const title = `[feedback][${kind}] ${entry.name}@${entry.version}`;
+  const body = [`插件：${entry.name}@${entry.version}`, `类别：${kind}`, "", "反馈内容（已自动脱敏）：", record.text].join("\n");
+  const url = `https://github.com/cctice/workflow-party/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
+  return { record, url };
+}
+
 // ---- CLI ----
 function parseArgs(argv) {
   const flags = {};
   const pos = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--json" || a === "--category" || a === "--sort" || a === "--by" || a === "--consumer") {
+    if (a === "--json" || a === "--category" || a === "--sort" || a === "--by" || a === "--consumer" || a === "--kind") {
       if (a === "--json") flags.json = true;
       else flags[a.slice(2)] = argv[++i];
     } else pos.push(a);
@@ -236,8 +271,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   } else if (cmd === "ingest") {
     const n = ingestEvents(root);
     console.log(`归账 ${n} 条安装事件（幂等：重跑为 0）`);
+  } else if (cmd === "feedback") {
+    const [, ...textParts] = pos;
+    const fb = submitFeedback(root, pos[0], textParts.join(" "), { kind: flags.kind || "review" });
+    if (!fb) { console.error(`未找到插件：${pos[0]}`); process.exit(1); }
+    console.log(`已留档（已脱敏）：${fb.record.text}`);
+    console.log(`提交 issue：${fb.url}`);
   } else {
-    console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N] | record <name> [--consumer c] | ingest");
+    console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N] | record <name> [--consumer c] | ingest | feedback <name> <text> [--kind bug|idea|review]");
     process.exit(cmd ? 1 : 0);
   }
 }
