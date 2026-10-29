@@ -16,6 +16,22 @@
 会真装一遍：plugin.json 身份 + skills 可发现缺一不可）：
 
 ```bash
+# 一键重建（八轮起为正道）：staging→打包→指纹→双清单→provenance 登记，五步一条命令
+node scripts/rebuild-artifacts.mjs --all          # 全部本地产物
+node scripts/rebuild-artifacts.mjs kaleidosphere  # 只重建指定插件
+```
+
+脚本自动完成：staging（`plugin.json` + `README.md` + `README_CN.md` +
+`skills`，存在即收）、`.DS_Store` 清除、`COPYFILE_DISABLE=1` 打包、sha256
+回写双清单、`provenance.json` 自动登记（重建来源与日期），收尾自跑
+`scripts/verify-artifacts.mjs` 三方对账，链不绿非零退出。
+产物命名：`plugins/<name>/resources/<name>-<version>.tgz`（version-linkage
+门强制文件名版本 = 源版本）。`test/rebuild-script.test.mjs` 看守脚本形态。
+
+脚本失效时的人肉回退（与脚本行为逐条对齐，`test/release-runbook.test.mjs`
+引用校验的载荷清单）：
+
+```bash
 # kaleidosphere（示例版本 0.4.2，替换为真实版本）
 stage=$(mktemp -d)/package && mkdir -p "$stage"
 (cd plugins/kaleidosphere && cp -R plugin.json README.md README_CN.md skills "$stage/")
@@ -26,17 +42,17 @@ rm -rf "$(dirname "$stage")"
 # kfc-plugin 同理：cp -R plugin.json README.md skills
 ```
 
-产物命名：`plugins/<name>/resources/<name>-<version>.tgz`（version-linkage
-门强制文件名版本 = 源版本）。
-
 ## 2. 计算 sha256 并写入索引清单
+
+重建脚本已自动回写；人肉回退时：
 
 ```bash
 shasum -a 256 plugins/<name>/resources/<name>-<version>.tgz
 ```
 
 把 `sha256:<hex>` 写入 `.claude-plugin/marketplace.json` 对应条目的
-`integrity` 字段；同一条目的 `version` 改为 `<version>`。
+`integrity` 字段；同一条目的 `version` 改为 `<version>`；`provenance.json`
+登记来源记录（脚本路径自动完成，人肉路径勿忘——verify:artifacts 会拦）。
 `.agents/plugins/marketplace.json` 无 integrity 字段，但 category 等字段
 由 `test/manifest-sync.test.mjs` 字段级对齐门看护。
 

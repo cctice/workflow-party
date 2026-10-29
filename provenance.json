@@ -6,21 +6,23 @@
       "plugin": "kaleidosphere",
       "version": "0.4.2",
       "artifact": "plugins/kaleidosphere/resources/kaleidosphere-0.4.2.tgz",
-      "sha256": "sha256:2853054b9b91385b160addba21a02d57320113807867e1318efa10009278bd63",
+      "sha256": "sha256:7afa100bc132600ad445e2db379d05d76159e9a95be54f42b3bd9d49287b29b5",
       "source": "./plugins/kaleidosphere",
       "sourceRepo": "cctice/kaleidosphere",
-      "builtFrom": "kaleidosphere 源仓 plugin.json 版本 0.4.2 同步构建（tgz 内 plugin.json name+version 与市场条目一致，见 test/artifact-integrity.test.mjs 内容级校验）",
-      "recordedAt": "2026-10-28"
+      "builtFrom": "scripts/rebuild-artifacts.mjs 脚本化重建：源 plugin.json 版本 0.4.2 同步构建（staging 载荷 plugin.json+README.md+README_CN.md+skills）",
+      "recordedAt": "2026-10-28",
+      "rebuiltAt": "2026-10-29"
     },
     {
       "plugin": "kfc-plugin",
       "version": "0.1.1",
       "artifact": "plugins/kfc-plugin/resources/kfc-plugin-0.1.1.tgz",
-      "sha256": "sha256:4632fbe0e678e191e68398ee2b400acbf5dacf40293e965ee8070794f58ce7b7",
+      "sha256": "sha256:69d62404e67d9151501910d204e131840ec3cc60973dacaf6b2fdc2da0b63d3a",
       "source": "./plugins/kfc-plugin",
       "sourceRepo": "cctice/workflow-party（本仓内源目录）",
-      "builtFrom": "plugins/kfc-plugin 源目录构建（plugin.json 版本 0.1.1，tgz 内容级校验同上）",
-      "recordedAt": "2026-10-28"
+      "builtFrom": "scripts/rebuild-artifacts.mjs 脚本化重建：源 plugin.json 版本 0.1.1 同步构建（staging 载荷 plugin.json+README.md+skills）",
+      "recordedAt": "2026-10-28",
+      "rebuiltAt": "2026-10-29"
     }
   ]
 }
