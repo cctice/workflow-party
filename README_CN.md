@@ -1,7 +1,7 @@
 # Workflow Party（工作流市场）
 
 [![CI](https://github.com/cctice/workflow-party/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/cctice/workflow-party/actions/workflows/ci.yml)
-[![version](https://img.shields.io/badge/version-0.1.3-22d3EE)](https://github.com/cctice/workflow-party) [![license](https://img.shields.io/badge/license-MIT-3B82F6)](https://github.com/cctice/workflow-party/blob/master/LICENSE) [![tests](https://img.shields.io/badge/tests-57%20passing-brightgreen)](https://github.com/cctice/workflow-party) [![plugins](https://img.shields.io/badge/plugins-3_listed-8B5CF6)](https://github.com/cctice/workflow-party/blob/master/.claude-plugin/marketplace.json)
+[![version](https://img.shields.io/badge/version-0.1.3-22d3EE)](https://github.com/cctice/workflow-party) [![license](https://img.shields.io/badge/license-MIT-3B82F6)](https://github.com/cctice/workflow-party/blob/master/LICENSE) [![tests](https://img.shields.io/badge/tests-63%20passing-brightgreen)](https://github.com/cctice/workflow-party) [![plugins](https://img.shields.io/badge/plugins-3_listed-8B5CF6)](https://github.com/cctice/workflow-party/blob/master/.claude-plugin/marketplace.json)
 
 cctice 维护的个人 Agent 工作流市场。本仓只保存市场索引与已验证的发布产物；
 插件源码住在各自的仓库里。市场负责发现与入口，不收留插件源码的第二份家。

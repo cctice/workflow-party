@@ -9,12 +9,15 @@
 //   node scripts/market.mjs search <关键词...> [--json]     # 分词+相关度评分（name>category>description，多词 AND）
 //   node scripts/market.mjs info <name> [--json]            # 条目 + 下载量 + 来源
 //   node scripts/market.mjs stats [--json]                  # 下载量台账全量
-//   node scripts/market.mjs bump <name> [--by N]            # 安装/发放回填下载量（默认 +1）
+//   node scripts/market.mjs bump <name> [--by N]            # 安装/发放回填下载量（默认 +1，手工形态）
+//   node scripts/market.mjs record <name> [--consumer ks]   # 安装事件回传（九轮）：追加 events.jsonl 并当场归账
+//   node scripts/market.mjs ingest                          # 归账待处理事件（seq 水位幂等，重跑不多记）
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const root = process.env.WFP_ROOT ? path.resolve(process.env.WFP_ROOT)
+  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** 分类归一：大小写/空格-连字符 归一（"Developer Tools" === "developer-tools"） */
 export function normalizeCategory(c) {
@@ -127,13 +130,66 @@ export function bumpDownloads(repoRoot, name, by = 1) {
   return stats.counts[key];
 }
 
+// ---- 安装事件回传通道（九轮）----
+// 痛点：下载量台账此前只能 `bump` 手填——发现机制的数据面是壳，没有真实安装事件。
+// 现在安装侧（如 ks market install 落位后）经 record 追加一条事件到 stats/events.jsonl，
+// ingest 按 seq 水位折叠进 counts（每条事件只记一次账，重跑幂等）；bump 保留为
+// 手工回填形态（历史发放），事件账与手工账同仓不同源，台账 note 如实标注混合。
+
+const eventsPath = (repoRoot) => path.join(repoRoot, "stats", "events.jsonl");
+
+function readEventLines(repoRoot) {
+  try {
+    return fs.readFileSync(eventsPath(repoRoot), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  } catch { return []; } // 通道未开张：零事件，如实
+}
+
+/** 安装事件落通道：校验插件在场（版本不跟即拒——不替人编造），seq 单调，当场归账 */
+export function recordInstall(repoRoot, name, { consumer = "unknown", version } = {}) {
+  const index = JSON.parse(fs.readFileSync(path.join(repoRoot, ".claude-plugin", "marketplace.json"), "utf8"));
+  const entry = index.plugins.find((p) => p.name === name);
+  if (!entry) return null;
+  if (version && version !== entry.version) {
+    const err = new Error(`版本不符：事件 ${version} ≠ 市场当前 ${entry.version}`);
+    err.code = "VERSION_MISMATCH";
+    throw err;
+  }
+  const events = readEventLines(repoRoot);
+  const seq = events.reduce((m, e) => Math.max(m, e.seq || 0), 0) + 1;
+  const event = { seq, type: "install", plugin: entry.name, version: entry.version, consumer, at: new Date().toISOString() };
+  fs.mkdirSync(path.dirname(eventsPath(repoRoot)), { recursive: true });
+  fs.appendFileSync(eventsPath(repoRoot), JSON.stringify(event) + "\n");
+  const folded = ingestEvents(repoRoot);
+  return { event, folded };
+}
+
+/** 折叠事件进下载台账：只记 seq > 水位 的事件，返回本次归账条数（幂等重跑=0） */
+export function ingestEvents(repoRoot) {
+  const statsPath = path.join(repoRoot, "stats", "downloads.json");
+  const stats = JSON.parse(fs.readFileSync(statsPath, "utf8"));
+  const watermark = stats.foldedSeq ?? 0;
+  const pending = readEventLines(repoRoot).filter((e) => (e.seq || 0) > watermark);
+  for (const e of pending) {
+    if (e.type !== "install") continue; // 通道只认安装事件，别的类型如实不动账
+    const key = `${e.plugin}@${e.version}`;
+    stats.counts[key] = (stats.counts[key] ?? 0) + 1;
+    stats.foldedSeq = e.seq;
+  }
+  if (pending.length > 0) {
+    stats.updatedAt = new Date().toISOString().slice(0, 10);
+    stats.eventLedger = { foldedSeq: stats.foldedSeq, foldedAt: new Date().toISOString() };
+    fs.writeFileSync(statsPath, JSON.stringify(stats, null, 2) + "\n");
+  }
+  return pending.filter((e) => e.type === "install").length;
+}
+
 // ---- CLI ----
 function parseArgs(argv) {
   const flags = {};
   const pos = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--json" || a === "--category" || a === "--sort" || a === "--by") {
+    if (a === "--json" || a === "--category" || a === "--sort" || a === "--by" || a === "--consumer") {
       if (a === "--json") flags.json = true;
       else flags[a.slice(2)] = argv[++i];
     } else pos.push(a);
@@ -169,8 +225,19 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     const n = bumpDownloads(root, pos[0], Number(flags.by) || 1);
     if (n == null) { console.error(`未找到插件：${pos[0]}`); process.exit(1); }
     console.log(`${pos[0]} 下载量 → ${n}`);
+  } else if (cmd === "record") {
+    try {
+      const r = recordInstall(root, pos[0], { consumer: flags.consumer || "unknown" });
+      if (!r) { console.error(`未找到插件：${pos[0]}`); process.exit(1); }
+      console.log(`事件 seq=${r.event.seq} 已落通道并归账（本次折叠 ${r.folded} 条）`);
+    } catch (err) {
+      console.error(err.message); process.exit(1);
+    }
+  } else if (cmd === "ingest") {
+    const n = ingestEvents(root);
+    console.log(`归账 ${n} 条安装事件（幂等：重跑为 0）`);
   } else {
-    console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N]");
+    console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N] | record <name> [--consumer c] | ingest");
     process.exit(cmd ? 1 : 0);
   }
 }
