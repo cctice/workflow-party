@@ -9,7 +9,9 @@
     "test": "node --test",
     "verify:artifacts": "node scripts/verify-artifacts.mjs",
     "market": "node scripts/market.mjs",
-    "rebuild:artifacts": "node scripts/rebuild-artifacts.mjs"
+    "rebuild:artifacts": "node scripts/rebuild-artifacts.mjs",
+    "site": "node scripts/build-site.mjs",
+    "site:check": "node scripts/build-site.mjs --check"
   },
   "engines": {
     "node": ">=20"
