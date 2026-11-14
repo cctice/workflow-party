@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { loadCatalog, buildReport } from "../scripts/market.mjs";
+import { loadCatalog, buildReport, weeklyTrend, isoWeekKey } from "../scripts/market.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -65,4 +65,64 @@ test("无查询记录如实报空——热度数据面起步，不编造", () =>
   const report = buildReport(loadCatalog(tmp), tmp);
   assert.deepEqual(report.heat, []);
   fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+// ---- 十一轮：三本账时间维度（周趋势/环比） ----
+
+test("isoWeekKey：ISO 周口径（周一之始，跨年周不慌）", () => {
+  assert.equal(isoWeekKey(new Date("2026-01-01T00:00:00Z")), "2026-W01");
+  assert.equal(isoWeekKey(new Date("2026-01-05T00:00:00Z")), "2026-W02"); // 周一
+  assert.equal(isoWeekKey(new Date("2026-01-04T23:59:59Z")), "2026-W01"); // 周日仍属上周
+});
+
+test("weeklyTrend：三本账按周分桶+环比；前周为零如实 null 不编 ∞%", () => {
+  const root = tmpRoot({});
+  fs.mkdirSync(path.join(root, "stats"), { recursive: true });
+  const now = new Date();
+  const daysAgo = (n) => new Date(now.getTime() - n * 86400000).toISOString();
+  // 上上周 2 安装 1 反馈；上周 4 安装 2 搜索；当周（partial）1 搜索
+  fs.writeFileSync(path.join(root, "stats", "events.jsonl"), [
+    JSON.stringify({ seq: 1, type: "install", plugin: "p", version: "1", at: daysAgo(15) }),
+    JSON.stringify({ seq: 2, type: "install", plugin: "p", version: "1", at: daysAgo(14) }),
+    JSON.stringify({ seq: 3, type: "install", plugin: "p", version: "1", at: daysAgo(8) }),
+    JSON.stringify({ seq: 4, type: "install", plugin: "p", version: "1", at: daysAgo(7) }),
+  ].join("\n") + "\n");
+  fs.writeFileSync(path.join(root, "stats", "feedback.jsonl"),
+    JSON.stringify({ at: daysAgo(15), plugin: "p@1", kind: "bug", text: "x" }) + "\n");
+  fs.writeFileSync(path.join(root, "stats", "queries.jsonl"), [
+    JSON.stringify({ q: "gatt", at: daysAgo(8) }),
+    JSON.stringify({ q: "gatt", at: daysAgo(7) }),
+    JSON.stringify({ q: "afk", at: daysAgo(1) }),
+  ].join("\n") + "\n");
+
+  const t = weeklyTrend(root, 4);
+  assert.equal(t.series.length, 4);
+  assert.equal(t.partial, true, "当周进行中");
+  // 桶对得上：上周 installs=2 searches=2；上上周 installs=2 feedback=1
+  const lastFull = t.series[t.series.length - 2];
+  assert.equal(lastFull.installs, 2);
+  assert.equal(lastFull.searches, 2);
+  const prevFull = t.series[t.series.length - 3];
+  assert.equal(prevFull.installs, 2);
+  assert.equal(prevFull.feedback, 1);
+  // 环比：installs 2 vs 2 = 0%；feedback 0 vs 1 = -100%；searches 2 vs 0 = null（前周零不编）
+  assert.equal(t.wow.installs, 0);
+  assert.equal(t.wow.feedback, -100);
+  assert.equal(t.wow.searches, null);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("report 面带 trend（buildReport 集成）；空账周不断档全 0", () => {
+  const root = tmpRoot({});
+  fs.mkdirSync(path.join(root, "stats"), { recursive: true });
+  // 空三本账：周序列仍连续、全 0
+  const t = weeklyTrend(root, 3);
+  assert.equal(t.series.length, 3);
+  assert.ok(t.series.every((w) => w.installs === 0 && w.feedback === 0 && w.searches === 0));
+  assert.ok(t.wow, '周数够即出 wow 面（差值全 null 如实不编）');
+  assert.equal(t.wow.installs, null, '前周为零差值 null（不编 ∞%）');
+  // buildReport 集成面：trend 挂进报表
+  const report = buildReport(loadCatalog(root), root);
+  assert.ok(report.trend && report.trend.series.length === 4, 'report 应带 trend 面（默认 4 周）');
+  fs.rmSync(root, { recursive: true, force: true });
 });
