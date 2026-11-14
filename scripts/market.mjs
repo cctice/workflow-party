@@ -243,6 +243,62 @@ function topQueries(repoRoot, limit = 5) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, limit);
 }
 
+// ---- 时间维度（十一轮）：三本账只有总量不知道方向——按 ISO 周分桶+环比 ----
+// 事件/反馈/查询三本账都有 at 时间戳：weeklyTrend 把它们折成每周计数，
+// 环比（wow）= 最近完整周 vs 前一周（进行中当周如实标 partial，不冒充完整周）。
+
+/** ISO 周键：'YYYY-Www'（周一为一周之始，与报表口径一致） */
+export function isoWeekKey(date) {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const day = d.getUTCDay() || 7; // 周日=7
+  d.setUTCDate(d.getUTCDate() + 4 - day); // 本周四=ISO 年锚点
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+function readJsonl(repoRoot, file) {
+  try {
+    return fs.readFileSync(path.join(repoRoot, "stats", file), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  } catch { return []; }
+}
+
+/** 三本账按周分桶：最近 weeks 周（含当周），周键升序；无记录的周计 0（趋势不断档） */
+export function weeklyTrend(repoRoot, weeks = 4) {
+  const installs = readJsonl(repoRoot, "events.jsonl").filter((e) => e.type === "install");
+  const feedback = readJsonl(repoRoot, "feedback.jsonl");
+  const searches = readJsonl(repoRoot, "queries.jsonl");
+  const bucket = (rows) => {
+    const m = new Map();
+    for (const r of rows) {
+      if (!r.at) continue;
+      const k = isoWeekKey(new Date(r.at));
+      m.set(k, (m.get(k) ?? 0) + 1);
+    }
+    return m;
+  };
+  const bi = bucket(installs), bf = bucket(feedback), bs = bucket(searches);
+  // 周序列：从当周回溯 weeks-1 周，保证连续
+  const now = new Date();
+  const keys = [];
+  for (let i = weeks - 1; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 7 * 86400000);
+    keys.push(isoWeekKey(d));
+  }
+  const series = keys.map((k) => ({ week: k, installs: bi.get(k) ?? 0, feedback: bf.get(k) ?? 0, searches: bs.get(k) ?? 0 }));
+  // 环比：最近完整周（倒数第二）vs 前一周（倒数第三）；周数不足或前周为 0 如实 null（不编 ∞%）
+  const last = series[series.length - 2], prev = series[series.length - 3];
+  const wowOf = (a, b) => (last && prev && b > 0 ? Math.round(((a - b) / b) * 1000) / 10 : null);
+  const partial = series.length > 0 ? series[series.length - 1].week === isoWeekKey(now) : false;
+  return {
+    series,
+    partial,
+    wow: last && prev
+      ? { week: last.week, installs: wowOf(last.installs, prev.installs), feedback: wowOf(last.feedback, prev.feedback), searches: wowOf(last.searches, prev.searches), note: "最近完整周 vs 前一周（%）；null=前周为零或周数不足，如实不编" }
+      : null,
+  };
+}
+
 /** 聚合报表：下载总量/份额榜/版本摊薄/搜索热度（零下载如实点名，不灌水） */
 export function buildReport(catalog, repoRoot = root, { topN = 5 } = {}) {
   const byName = new Map(catalog.entries.map((e) => [e.name, e]));
@@ -269,7 +325,8 @@ export function buildReport(catalog, repoRoot = root, { topN = 5 } = {}) {
       };
     });
   const heat = topQueries(repoRoot, topN).map(([q, n]) => ({ query: q, searches: n, topHit: searchPlugins(catalog, q)[0]?.name ?? null }));
-  return { total, zeroDownload: leaderboard.filter((r) => r.downloads === 0).map((r) => r.plugin), leaderboard, heat };
+  const trend = weeklyTrend(repoRoot, 4);
+  return { total, zeroDownload: leaderboard.filter((r) => r.downloads === 0).map((r) => r.plugin), leaderboard, heat, trend };
 }
 
 // ---- CLI ----
@@ -342,6 +399,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
         console.log("搜索热度：");
         report.heat.forEach((h) => console.log(`  ${h.searches}×  "${h.query}" → ${h.topHit ?? "无命中"}`));
       } else console.log("搜索热度：暂无查询记录（数据面如实起步）");
+      if (report.trend) {
+        const t = report.trend;
+        console.log(`周趋势（${t.series.length} 周${t.partial ? "，当周进行中" : ""}）：`);
+        t.series.forEach((w) => console.log(`  ${w.week}  ↓${w.installs}  反馈 ${w.feedback}  搜索 ${w.searches}`));
+        if (t.wow) {
+          const f = (v) => (v === null ? "n/a" : `${v >= 0 ? "+" : ""}${v}%`);
+          console.log(`环比（${t.wow.week} vs 前一周）：下载 ${f(t.wow.installs)}  反馈 ${f(t.wow.feedback)}  搜索 ${f(t.wow.searches)}`);
+        } else console.log("环比：周数不足（数据起步第一周，下周起出环比）");
+      }
     }
   } else {
     console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N] | record <name> [--consumer c] | ingest | feedback <name> <text> [--kind bug|idea|review] | report [--json]");
