@@ -159,8 +159,9 @@ export function recordInstall(repoRoot, name, { consumer = "unknown", version } 
   const events = readEventLines(repoRoot);
   const seq = events.reduce((m, e) => Math.max(m, e.seq || 0), 0) + 1;
   const event = { seq, type: "install", plugin: entry.name, version: entry.version, consumer, at: new Date().toISOString() };
-  fs.mkdirSync(path.dirname(eventsPath(repoRoot)), { recursive: true });
-  fs.appendFileSync(eventsPath(repoRoot), JSON.stringify(event) + "\n");
+  // 有界追加（十二轮）：未归账（seq > 折叠水位）的事件永不裁——账可瘦，未归账一条不丢
+  const watermark = JSON.parse(fs.readFileSync(path.join(repoRoot, "stats", "downloads.json"), "utf8")).foldedSeq ?? 0;
+  appendLedger(repoRoot, "events.jsonl", event, (e) => (e.seq || 0) > watermark);
   const folded = ingestEvents(repoRoot);
   return { event, folded };
 }
@@ -210,9 +211,7 @@ export function submitFeedback(repoRoot, name, text, { kind = "review" } = {}) {
     kind,
     text: redactText(text),
   };
-  const fbPath = path.join(repoRoot, "stats", "feedback.jsonl");
-  fs.mkdirSync(path.dirname(fbPath), { recursive: true });
-  fs.appendFileSync(fbPath, JSON.stringify(record) + "\n");
+  appendLedger(repoRoot, "feedback.jsonl", record); // 有界追加（十二轮）
   const title = `[feedback][${kind}] ${entry.name}@${entry.version}`;
   const body = [`插件：${entry.name}@${entry.version}`, `类别：${kind}`, "", "反馈内容（已自动脱敏）：", record.text].join("\n");
   const url = `https://github.com/cctice/workflow-party/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
@@ -226,11 +225,108 @@ export function submitFeedback(repoRoot, name, text, { kind = "review" } = {}) {
 
 const queriesPath = (repoRoot) => path.join(repoRoot, "stats", "queries.jsonl");
 
+// ---- 台账自治（十二轮）：三本账 jsonl 从"只增不删"变"封顶收敛" ----
+// 痛点：events/feedback/queries 三本账 appendFileSync 只增不删——记多少涨多少，
+// 读侧（record 的 seq 扫描/报表聚合）跟着无限涨。自治口径：
+//   - 每本账封顶 WFP_LEDGER_MAX（默认 5000 条，0=关闭自治），写路径超限即收敛保最新；
+//   - events.jsonl 的保护谓词：seq > 折叠水位的事件（未归账）永不裁——账可以瘦，
+//     一条未归账的安装事件都不能丢；
+//   - 收敛原子写（tmp+rename），裁了多少记 stats/ledger-state.json（可观测面），
+//     report 面如实展示每本账行数/封顶/累计裁剪。
+const LEDGERS = ["events.jsonl", "feedback.jsonl", "queries.jsonl"];
+
+export function ledgerMax() {
+  const n = Number(process.env.WFP_LEDGER_MAX);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 5000;
+}
+
+const ledgerStatePath = (repoRoot) => path.join(repoRoot, "stats", "ledger-state.json");
+
+function readLedgerState(repoRoot) {
+  try {
+    return JSON.parse(fs.readFileSync(ledgerStatePath(repoRoot), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function noteTrimmed(repoRoot, file, trimmed, kept) {
+  const state = readLedgerState(repoRoot);
+  const prev = state[file] ?? { trimmedTotal: 0 };
+  state[file] = {
+    trimmedTotal: prev.trimmedTotal + trimmed,
+    lastTrimmedAt: new Date().toISOString(),
+    keptAtLastTrim: kept,
+  };
+  fs.mkdirSync(path.dirname(ledgerStatePath(repoRoot)), { recursive: true });
+  fs.writeFileSync(ledgerStatePath(repoRoot), JSON.stringify(state, null, 2) + "\n");
+}
+
+/** 收敛一本账：保尾部 max 条 + 谓词保护条目（相对顺序不变），原子落盘 */
+export function trimLedger(repoRoot, file, max = ledgerMax(), protect = null) {
+  const p = path.join(repoRoot, "stats", file);
+  if (max <= 0) return { file, before: 0, after: 0, trimmed: 0, note: "自治关闭（WFP_LEDGER_MAX=0）" };
+  let rows;
+  try {
+    rows = fs.readFileSync(p, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  } catch {
+    return { file, before: 0, after: 0, trimmed: 0, note: "台账未开张" };
+  }
+  if (rows.length <= max) return { file, before: rows.length, after: rows.length, trimmed: 0 };
+  const keepIdx = new Set();
+  if (protect) rows.forEach((r, i) => { if (protect(r)) keepIdx.add(i); });
+  for (let i = rows.length - 1; i >= 0 && keepIdx.size < max; i -= 1) keepIdx.add(i);
+  const kept = rows.filter((_, i) => keepIdx.has(i));
+  const tmp = `${p}.tmp`;
+  fs.writeFileSync(tmp, kept.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  fs.renameSync(tmp, p);
+  noteTrimmed(repoRoot, file, rows.length - kept.length, kept.length);
+  return { file, before: rows.length, after: kept.length, trimmed: rows.length - kept.length };
+}
+
+/** 有界追加：正常走 append；超封顶走收敛（保护条目永不裁） */
+export function appendLedger(repoRoot, file, row, protect = null) {
+  const p = path.join(repoRoot, "stats", file);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const max = ledgerMax();
+  let lines = 0;
+  try {
+    lines = fs.readFileSync(p, "utf8").split("\n").filter(Boolean).length;
+  } catch { /* 未开张 */ }
+  fs.appendFileSync(p, JSON.stringify(row) + "\n");
+  if (max > 0 && lines + 1 > max) {
+    const r = trimLedger(repoRoot, file, max, protect);
+    return { trimmed: r.trimmed };
+  }
+  return { trimmed: 0 };
+}
+
+/** 台账健康面：每本账行数/字节/封顶/累计裁剪（report 如实展示） */
+export function ledgerHealth(repoRoot) {
+  const state = readLedgerState(repoRoot);
+  return LEDGERS.map((file) => {
+    const p = path.join(repoRoot, "stats", file);
+    let lines = 0, bytes = 0;
+    try {
+      const raw = fs.readFileSync(p, "utf8");
+      lines = raw.split("\n").filter(Boolean).length;
+      bytes = Buffer.byteLength(raw);
+    } catch { /* 未开张如实 0 */ }
+    return {
+      file,
+      lines,
+      bytes,
+      max: ledgerMax(),
+      trimmedTotal: state[file]?.trimmedTotal ?? 0,
+      lastTrimmedAt: state[file]?.lastTrimmedAt ?? null,
+    };
+  });
+}
+
 export function logQuery(repoRoot, query) {
   const q = String(query || "").trim();
   if (!q) return;
-  fs.mkdirSync(path.dirname(queriesPath(repoRoot)), { recursive: true });
-  fs.appendFileSync(queriesPath(repoRoot), JSON.stringify({ q, at: new Date().toISOString() }) + "\n");
+  appendLedger(repoRoot, "queries.jsonl", { q, at: new Date().toISOString() });
 }
 
 function topQueries(repoRoot, limit = 5) {
@@ -326,7 +422,8 @@ export function buildReport(catalog, repoRoot = root, { topN = 5 } = {}) {
     });
   const heat = topQueries(repoRoot, topN).map(([q, n]) => ({ query: q, searches: n, topHit: searchPlugins(catalog, q)[0]?.name ?? null }));
   const trend = weeklyTrend(repoRoot, 4);
-  return { total, zeroDownload: leaderboard.filter((r) => r.downloads === 0).map((r) => r.plugin), leaderboard, heat, trend };
+  const ledgers = ledgerHealth(repoRoot); // 台账健康面（十二轮）：行数/封顶/累计裁剪如实可见
+  return { total, zeroDownload: leaderboard.filter((r) => r.downloads === 0).map((r) => r.plugin), leaderboard, heat, trend, ledgers };
 }
 
 // ---- CLI ----
@@ -335,7 +432,7 @@ function parseArgs(argv) {
   const pos = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--json" || a === "--category" || a === "--sort" || a === "--by" || a === "--consumer" || a === "--kind") {
+    if (a === "--json" || a === "--category" || a === "--sort" || a === "--by" || a === "--consumer" || a === "--kind" || a === "--max") {
       if (a === "--json") flags.json = true;
       else flags[a.slice(2)] = argv[++i];
     } else pos.push(a);
@@ -408,9 +505,19 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
           console.log(`环比（${t.wow.week} vs 前一周）：下载 ${f(t.wow.installs)}  反馈 ${f(t.wow.feedback)}  搜索 ${f(t.wow.searches)}`);
         } else console.log("环比：周数不足（数据起步第一周，下周起出环比）");
       }
+      console.log("台账健康：");
+      report.ledgers.forEach((l) => console.log(`  ${l.file}  ${l.lines} 行 / ${l.bytes} B  封顶 ${l.max}  累计裁 ${l.trimmedTotal}`));
+    }
+  } else if (cmd === "trim") {
+    const max = flags.max ? Number(flags.max) : ledgerMax();
+    for (const file of LEDGERS) {
+      const watermark = (() => { try { return JSON.parse(fs.readFileSync(path.join(root, "stats", "downloads.json"), "utf8")).foldedSeq ?? 0; } catch { return 0; } })();
+      const protect = file === "events.jsonl" ? (e) => (e.seq || 0) > watermark : null;
+      const r = trimLedger(root, file, max, protect);
+      console.log(`${r.file}  ${r.before} → ${r.after}（裁 ${r.trimmed}${r.note ? `，${r.note}` : ""}）`);
     }
   } else {
-    console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N] | record <name> [--consumer c] | ingest | feedback <name> <text> [--kind bug|idea|review] | report [--json]");
+    console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N] | record <name> [--consumer c] | ingest | feedback <name> <text> [--kind bug|idea|review] | report [--json] | trim [--max N]");
     process.exit(cmd ? 1 : 0);
   }
 }
