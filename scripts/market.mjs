@@ -250,6 +250,39 @@ export function ledgerMax() {
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 5000;
 }
 
+// ---- 归档面（十三轮）：封顶前的历史明细可再审计 ----
+// 痛点（十二轮留题）：自治有了封顶，但被裁行直接丢弃——counts 聚合还在，
+// 明细行没了（谁装的/搜了什么/反馈原文），"审计"只剩聚合口径。
+// 口径：trim 被裁行先导出 stats/archive/<账名前缀>-<UTC 时间戳>.jsonl；
+//   - 归档失败本轮不裁（数据安全优先，宁可账胖着）；
+//   - 归档文件保留 WFP_LEDGER_ARCHIVE_KEEP 份（默认 12，0=关闭归档=回到旧行为），
+//     超限删最旧（归档本身也要有界，不把"只增不删"的病搬到 archive/）；
+//   - ledger-state.json 记 lastArchive/archivedTotal（可观测面）。
+export function ledgerArchiveKeep() {
+  const n = Number(process.env.WFP_LEDGER_ARCHIVE_KEEP);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 12;
+}
+
+const archiveDir = (repoRoot) => path.join(repoRoot, "stats", "archive");
+
+/** 被裁行落归档：返回 { path, rows }；keep=0 如实返回 { skipped: true } */
+function archiveTrimmed(repoRoot, file, trimmedRows) {
+  const keep = ledgerArchiveKeep();
+  if (keep === 0 || trimmedRows.length === 0) return { skipped: true, keep, rows: trimmedRows.length };
+  fs.mkdirSync(archiveDir(repoRoot), { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const p = path.join(archiveDir(repoRoot), `${file.replace(/\.jsonl$/, "")}-${stamp}.jsonl`);
+  const tmp = `${p}.tmp`;
+  fs.writeFileSync(tmp, trimmedRows.map((r) => JSON.stringify(r)).join("\n") + "\n"); // 原子落盘：半份归档不出现
+  fs.renameSync(tmp, p);
+  // 归档有界：超 keep 份删最旧（文件名时间戳字典序=时间序）
+  const all = fs.readdirSync(archiveDir(repoRoot))
+    .filter((f) => f.startsWith(`${file.replace(/\.jsonl$/, "")}-`) && f.endsWith(".jsonl"))
+    .sort();
+  for (const old of all.slice(0, Math.max(0, all.length - keep))) fs.rmSync(path.join(archiveDir(repoRoot), old), { force: true });
+  return { path: p, rows: trimmedRows.length, keep };
+}
+
 const ledgerStatePath = (repoRoot) => path.join(repoRoot, "stats", "ledger-state.json");
 
 // ---- 台账写侧并发保护（十三轮）：jsonl"单进程写"假设钉死 ----
@@ -306,13 +339,15 @@ function readLedgerState(repoRoot) {
   }
 }
 
-function noteTrimmed(repoRoot, file, trimmed, kept) {
+function noteTrimmed(repoRoot, file, trimmed, kept, archive = null) {
   const state = readLedgerState(repoRoot);
-  const prev = state[file] ?? { trimmedTotal: 0 };
+  const prev = state[file] ?? { trimmedTotal: 0, archivedTotal: 0 };
   state[file] = {
     trimmedTotal: prev.trimmedTotal + trimmed,
+    archivedTotal: prev.archivedTotal + (archive?.rows ?? 0),
     lastTrimmedAt: new Date().toISOString(),
     keptAtLastTrim: kept,
+    ...(archive?.path ? { lastArchive: { path: archive.path, rows: archive.rows, at: new Date().toISOString() } } : {}),
   };
   fs.mkdirSync(path.dirname(ledgerStatePath(repoRoot)), { recursive: true });
   fs.writeFileSync(ledgerStatePath(repoRoot), JSON.stringify(state, null, 2) + "\n");
@@ -338,11 +373,22 @@ function trimLedgerUnlocked(repoRoot, file, max, protect) {
   if (protect) rows.forEach((r, i) => { if (protect(r)) keepIdx.add(i); });
   for (let i = rows.length - 1; i >= 0 && keepIdx.size < max; i -= 1) keepIdx.add(i);
   const kept = rows.filter((_, i) => keepIdx.has(i));
+  const trimmedRows = rows.filter((_, i) => !keepIdx.has(i));
+  // 归档先行（十三轮）：被裁行落 archive/ 后才动真账——归档失败本轮不裁，数据安全优先
+  let archive;
+  try {
+    archive = archiveTrimmed(repoRoot, file, trimmedRows);
+  } catch (error) {
+    return { file, before: rows.length, after: rows.length, trimmed: 0, note: `归档失败本轮不裁：${error.message}` };
+  }
   const tmp = `${p}.tmp`;
   fs.writeFileSync(tmp, kept.map((r) => JSON.stringify(r)).join("\n") + "\n");
   fs.renameSync(tmp, p);
-  noteTrimmed(repoRoot, file, rows.length - kept.length, kept.length);
-  return { file, before: rows.length, after: kept.length, trimmed: rows.length - kept.length };
+  noteTrimmed(repoRoot, file, rows.length - kept.length, kept.length, archive.skipped ? null : archive);
+  return {
+    file, before: rows.length, after: kept.length, trimmed: rows.length - kept.length,
+    ...(archive.skipped ? {} : { archived: archive.rows, archivePath: archive.path }),
+  };
 }
 
 /** 有界追加：正常走 append；超封顶走收敛（保护条目永不裁）。持锁（十三轮） */
@@ -382,6 +428,8 @@ export function ledgerHealth(repoRoot) {
       max: ledgerMax(),
       trimmedTotal: state[file]?.trimmedTotal ?? 0,
       lastTrimmedAt: state[file]?.lastTrimmedAt ?? null,
+      archivedTotal: state[file]?.archivedTotal ?? 0,
+      lastArchive: state[file]?.lastArchive ?? null,
     };
   });
 }
@@ -569,7 +617,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
         } else console.log("环比：周数不足（数据起步第一周，下周起出环比）");
       }
       console.log("台账健康：");
-      report.ledgers.forEach((l) => console.log(`  ${l.file}  ${l.lines} 行 / ${l.bytes} B  封顶 ${l.max}  累计裁 ${l.trimmedTotal}`));
+      report.ledgers.forEach((l) => console.log(`  ${l.file}  ${l.lines} 行 / ${l.bytes} B  封顶 ${l.max}  累计裁 ${l.trimmedTotal}  累计归档 ${l.archivedTotal}${l.lastArchive ? `（最近 ${path.basename(l.lastArchive.path)} ${l.lastArchive.rows} 行）` : ""}`));
     }
   } else if (cmd === "trim") {
     const max = flags.max ? Number(flags.max) : ledgerMax();
@@ -577,7 +625,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       const watermark = (() => { try { return JSON.parse(fs.readFileSync(path.join(root, "stats", "downloads.json"), "utf8")).foldedSeq ?? 0; } catch { return 0; } })();
       const protect = file === "events.jsonl" ? (e) => (e.seq || 0) > watermark : null;
       const r = trimLedger(root, file, max, protect);
-      console.log(`${r.file}  ${r.before} → ${r.after}（裁 ${r.trimmed}${r.note ? `，${r.note}` : ""}）`);
+      const archived = r.archived != null ? `，归档 ${r.archived} 行 → ${path.basename(r.archivePath)}` : "";
+      console.log(`${r.file}  ${r.before} → ${r.after}（裁 ${r.trimmed}${archived}${r.note ? `，${r.note}` : ""}）`);
     }
   } else {
     console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N] | record <name> [--consumer c] | ingest | feedback <name> <text> [--kind bug|idea|review] | report [--json] | trim [--max N]");
