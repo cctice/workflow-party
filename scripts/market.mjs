@@ -146,7 +146,8 @@ function readEventLines(repoRoot) {
   } catch { return []; } // 通道未开张：零事件，如实
 }
 
-/** 安装事件落通道：校验插件在场（版本不跟即拒——不替人编造），seq 单调，当场归账 */
+/** 安装事件落通道：校验插件在场（版本不跟即拒——不替人编造），seq 单调，当场归账。
+ *  seq 计算读→追加→折叠整段持台账锁（十三轮）：两进程同时 record 不再撞出重复 seq。 */
 export function recordInstall(repoRoot, name, { consumer = "unknown", version } = {}) {
   const index = JSON.parse(fs.readFileSync(path.join(repoRoot, ".claude-plugin", "marketplace.json"), "utf8"));
   const entry = index.plugins.find((p) => p.name === name);
@@ -156,18 +157,27 @@ export function recordInstall(repoRoot, name, { consumer = "unknown", version } 
     err.code = "VERSION_MISMATCH";
     throw err;
   }
-  const events = readEventLines(repoRoot);
-  const seq = events.reduce((m, e) => Math.max(m, e.seq || 0), 0) + 1;
-  const event = { seq, type: "install", plugin: entry.name, version: entry.version, consumer, at: new Date().toISOString() };
-  // 有界追加（十二轮）：未归账（seq > 折叠水位）的事件永不裁——账可瘦，未归账一条不丢
-  const watermark = JSON.parse(fs.readFileSync(path.join(repoRoot, "stats", "downloads.json"), "utf8")).foldedSeq ?? 0;
-  appendLedger(repoRoot, "events.jsonl", event, (e) => (e.seq || 0) > watermark);
-  const folded = ingestEvents(repoRoot);
-  return { event, folded };
+  return withLedgerLock(repoRoot, () => {
+    const events = readEventLines(repoRoot);
+    const seq = events.reduce((m, e) => Math.max(m, e.seq || 0), 0) + 1;
+    const event = { seq, type: "install", plugin: entry.name, version: entry.version, consumer, at: new Date().toISOString() };
+    // 有界追加（十二轮）：未归账（seq > 折叠水位）的事件永不裁——账可瘦，未归账一条不丢
+    const watermark = JSON.parse(fs.readFileSync(path.join(repoRoot, "stats", "downloads.json"), "utf8")).foldedSeq ?? 0;
+    const p = path.join(repoRoot, "stats", "events.jsonl");
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.appendFileSync(p, JSON.stringify(event) + "\n");
+    const folded = ingestEventsUnlocked(repoRoot);
+    return { event, folded };
+  });
 }
 
-/** 折叠事件进下载台账：只记 seq > 水位 的事件，返回本次归账条数（幂等重跑=0） */
+/** 折叠事件进下载台账：只记 seq > 水位的事件，返回本次归账条数（幂等重跑=0）。
+ *  公开形态持台账锁（十三轮）；recordInstall 锁内复用 Unlocked 形态。 */
 export function ingestEvents(repoRoot) {
+  return withLedgerLock(repoRoot, () => ingestEventsUnlocked(repoRoot));
+}
+
+function ingestEventsUnlocked(repoRoot) {
   const statsPath = path.join(repoRoot, "stats", "downloads.json");
   const stats = JSON.parse(fs.readFileSync(statsPath, "utf8"));
   const watermark = stats.foldedSeq ?? 0;
@@ -242,6 +252,52 @@ export function ledgerMax() {
 
 const ledgerStatePath = (repoRoot) => path.join(repoRoot, "stats", "ledger-state.json");
 
+// ---- 台账写侧并发保护（十三轮）：jsonl"单进程写"假设钉死 ----
+// 痛点：appendLedger/trimLedger/ingestEvents 全是读-改-写裸奔——两进程同时 trim
+// 同一本账理论可交错（半行/重行/丢行），ledger-state.json 也会后写者整体覆盖前写者。
+// 口径（与 ks withStateLock 同款）：stats/.ledger.lock 独占锁（wx 原子创建）+
+// 有限重试（WFP_LEDGER_LOCK_TIMEOUT_MS 默认 2000ms）+陈锁超龄接管（30s，崩溃残留不卡死）。
+const LEDGER_LOCK_STALE_MS = 30 * 1000;
+
+function sleepSync(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+/** 台账独占锁：callback 全程持锁（append/trim/折叠的读-改-写整段原子） */
+export function withLedgerLock(repoRoot, callback) {
+  const lockPath = path.join(repoRoot, "stats", ".ledger.lock");
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  const timeoutMs = Number(process.env.WFP_LEDGER_LOCK_TIMEOUT_MS || 2000);
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let descriptor;
+    try {
+      descriptor = fs.openSync(lockPath, "wx");
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      try {
+        const lockAgeMs = Date.now() - fs.statSync(lockPath).mtimeMs;
+        if (lockAgeMs > LEDGER_LOCK_STALE_MS) {
+          fs.rmSync(lockPath, { force: true });
+          continue; // 陈锁接管：持锁进程崩溃残留不卡死后续写
+        }
+      } catch (statError) {
+        if (statError.code === "ENOENT") continue; // 持锁者刚释放，立即重试
+        throw statError;
+      }
+      if (Date.now() >= deadline) throw new Error(`ledger is busy (lock held); retry after the active market operation finishes`);
+      sleepSync(50);
+      continue;
+    }
+    try {
+      return callback();
+    } finally {
+      fs.closeSync(descriptor);
+      fs.rmSync(lockPath, { force: true });
+    }
+  }
+}
+
 function readLedgerState(repoRoot) {
   try {
     return JSON.parse(fs.readFileSync(ledgerStatePath(repoRoot), "utf8"));
@@ -262,8 +318,13 @@ function noteTrimmed(repoRoot, file, trimmed, kept) {
   fs.writeFileSync(ledgerStatePath(repoRoot), JSON.stringify(state, null, 2) + "\n");
 }
 
-/** 收敛一本账：保尾部 max 条 + 谓词保护条目（相对顺序不变），原子落盘 */
+/** 收敛一本账：保尾部 max 条 + 谓词保护条目（相对顺序不变），原子落盘。
+ *  公开形态持台账锁（十三轮并发保护）；锁内复用 Unlocked 形态防自死锁。 */
 export function trimLedger(repoRoot, file, max = ledgerMax(), protect = null) {
+  return withLedgerLock(repoRoot, () => trimLedgerUnlocked(repoRoot, file, max, protect));
+}
+
+function trimLedgerUnlocked(repoRoot, file, max, protect) {
   const p = path.join(repoRoot, "stats", file);
   if (max <= 0) return { file, before: 0, after: 0, trimmed: 0, note: "自治关闭（WFP_LEDGER_MAX=0）" };
   let rows;
@@ -284,21 +345,23 @@ export function trimLedger(repoRoot, file, max = ledgerMax(), protect = null) {
   return { file, before: rows.length, after: kept.length, trimmed: rows.length - kept.length };
 }
 
-/** 有界追加：正常走 append；超封顶走收敛（保护条目永不裁） */
+/** 有界追加：正常走 append；超封顶走收敛（保护条目永不裁）。持锁（十三轮） */
 export function appendLedger(repoRoot, file, row, protect = null) {
-  const p = path.join(repoRoot, "stats", file);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  const max = ledgerMax();
-  let lines = 0;
-  try {
-    lines = fs.readFileSync(p, "utf8").split("\n").filter(Boolean).length;
-  } catch { /* 未开张 */ }
-  fs.appendFileSync(p, JSON.stringify(row) + "\n");
-  if (max > 0 && lines + 1 > max) {
-    const r = trimLedger(repoRoot, file, max, protect);
-    return { trimmed: r.trimmed };
-  }
-  return { trimmed: 0 };
+  return withLedgerLock(repoRoot, () => {
+    const p = path.join(repoRoot, "stats", file);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    const max = ledgerMax();
+    let lines = 0;
+    try {
+      lines = fs.readFileSync(p, "utf8").split("\n").filter(Boolean).length;
+    } catch { /* 未开张 */ }
+    fs.appendFileSync(p, JSON.stringify(row) + "\n");
+    if (max > 0 && lines + 1 > max) {
+      const r = trimLedgerUnlocked(repoRoot, file, max, protect);
+      return { trimmed: r.trimmed };
+    }
+    return { trimmed: 0 };
+  });
 }
 
 /** 台账健康面：每本账行数/字节/封顶/累计裁剪（report 如实展示） */
