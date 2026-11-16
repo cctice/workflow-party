@@ -79,20 +79,29 @@ test("weeklyTrend：三本账按周分桶+环比；前周为零如实 null 不�
   const root = tmpRoot({});
   fs.mkdirSync(path.join(root, "stats"), { recursive: true });
   const now = new Date();
-  const daysAgo = (n) => new Date(now.getTime() - n * 86400000).toISOString();
-  // 上上周 2 安装 1 反馈；上周 4 安装 2 搜索；当周（partial）1 搜索
+  // 周锚定（十三轮修）：相对天数跨 ISO 周界漂移（测试写于周日、周一跑就挂）——
+  // 一律以本周周一 00:00Z 为锚，偏移整周+周内天数，事件落哪一周与跑测日无关。
+  const mondayUTC = (weeksAgo) => {
+    const d = new Date(now);
+    const day = (d.getUTCDay() + 6) % 7; // 周一=0
+    d.setUTCDate(d.getUTCDate() - day - weeksAgo * 7);
+    d.setUTCHours(0, 0, 0, 0);
+    return d.getTime();
+  };
+  const inWeek = (weeksAgo, dayOffset) => new Date(mondayUTC(weeksAgo) + dayOffset * 86400000).toISOString();
+  // 上上周 2 安装 1 反馈；上周 2 安装 2 搜索；当周（partial）1 搜索
   fs.writeFileSync(path.join(root, "stats", "events.jsonl"), [
-    JSON.stringify({ seq: 1, type: "install", plugin: "p", version: "1", at: daysAgo(15) }),
-    JSON.stringify({ seq: 2, type: "install", plugin: "p", version: "1", at: daysAgo(14) }),
-    JSON.stringify({ seq: 3, type: "install", plugin: "p", version: "1", at: daysAgo(8) }),
-    JSON.stringify({ seq: 4, type: "install", plugin: "p", version: "1", at: daysAgo(7) }),
+    JSON.stringify({ seq: 1, type: "install", plugin: "p", version: "1", at: inWeek(2, 1) }),
+    JSON.stringify({ seq: 2, type: "install", plugin: "p", version: "1", at: inWeek(2, 2) }),
+    JSON.stringify({ seq: 3, type: "install", plugin: "p", version: "1", at: inWeek(1, 1) }),
+    JSON.stringify({ seq: 4, type: "install", plugin: "p", version: "1", at: inWeek(1, 2) }),
   ].join("\n") + "\n");
   fs.writeFileSync(path.join(root, "stats", "feedback.jsonl"),
-    JSON.stringify({ at: daysAgo(15), plugin: "p@1", kind: "bug", text: "x" }) + "\n");
+    JSON.stringify({ at: inWeek(2, 3), plugin: "p@1", kind: "bug", text: "x" }) + "\n");
   fs.writeFileSync(path.join(root, "stats", "queries.jsonl"), [
-    JSON.stringify({ q: "gatt", at: daysAgo(8) }),
-    JSON.stringify({ q: "gatt", at: daysAgo(7) }),
-    JSON.stringify({ q: "afk", at: daysAgo(1) }),
+    JSON.stringify({ q: "gatt", at: inWeek(1, 1) }),
+    JSON.stringify({ q: "gatt", at: inWeek(1, 3) }),
+    JSON.stringify({ q: "afk", at: inWeek(0, 0) }),
   ].join("\n") + "\n");
 
   const t = weeklyTrend(root, 4);
