@@ -82,7 +82,10 @@ test("README badges stay consistent with manifests and the real test count", () 
     `README plugins badge (${pluginsBadge[1]}) drifted from manifest entries (${index.plugins.length})`);
   assert.equal(index.plugins.length, agents.plugins.length, "manifests disagree on plugin count");
 
-  // tests 徽章 == test/*.mjs 顶层 test() 静态计数（新增用例忘刷徽章即红）
+  // tests 徽章 == test/*.mjs 顶层 test() 静态计数（新增用例忘刷徽章即红）。
+  // sync-badges 真跑门内部复跑时（WFP_SYNC_BADGES=1）让位：sync 自带 pass==declared
+  // 双重口径接管对账，防"徽章过期→门红→sync 拒刷"自拦死锁（十三轮）。
+  if (process.env.WFP_SYNC_BADGES === "1") return;
   const testFiles = fs.readdirSync(path.join(root, "test")).filter((f) => f.endsWith(".test.mjs"));
   let declared = 0;
   for (const file of testFiles) {
@@ -92,5 +95,5 @@ test("README badges stay consistent with manifests and the real test count", () 
   const testsBadge = readme.match(/badge\/tests-(\d+)%20passing-/);
   assert.ok(testsBadge, "README has no tests badge");
   assert.equal(Number(testsBadge[1]), declared,
-    `README tests badge (${testsBadge[1]}) drifted from declared tests (${declared})`);
+    `README tests badge (${testsBadge[1]}) drifted from declared tests (${declared}) — run npm run sync:badges`);
 });
