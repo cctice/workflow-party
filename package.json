@@ -11,7 +11,9 @@
     "market": "node scripts/market.mjs",
     "rebuild:artifacts": "node scripts/rebuild-artifacts.mjs",
     "site": "node scripts/build-site.mjs",
-    "site:check": "node scripts/build-site.mjs --check"
+    "site:check": "node scripts/build-site.mjs --check",
+    "sync:badges": "node scripts/sync-badges.mjs",
+    "check:badges": "node scripts/sync-badges.mjs --check"
   },
   "engines": {
     "node": ">=20"
