@@ -84,7 +84,7 @@ test("手动面：market trim --max 收敛三本账；WFP_LEDGER_MAX=0 自治关
     env: { ...process.env, WFP_ROOT: tmp },
     encoding: "utf8",
   });
-  assert.match(out, /queries\.jsonl\s+6 → 3（裁 3）/);
+  assert.match(out, /queries\.jsonl\s+6 → 3（裁 3，归档 3 行 → queries-[\w-]+\.jsonl）/); // 十三轮：裁即归档
   assert.equal(readLines(tmp, "queries.jsonl").length, 3);
 
   // 自治关闭：0 = 不裁（如实陈述，不静默关停）
@@ -121,5 +121,75 @@ test("收敛原子性：裁剪后文件合法 jsonl，无 .tmp 残留", () => {
     assert.deepEqual(rows.map((r) => r.text), ["t2", "t3"]);
   } finally {
     delete process.env.WFP_LEDGER_MAX;
+  }
+});
+
+// ---- 归档面（十三轮）：封顶前的历史明细可再审计 ----
+const archiveFiles = (tmp, prefix) => {
+  const dir = path.join(tmp, "stats", "archive");
+  try { return fs.readdirSync(dir).filter((f) => f.startsWith(prefix) && f.endsWith(".jsonl")).sort(); } catch { return []; }
+};
+
+test("归档面：被裁行落 archive/ 且内容一致，ledger-state 记账，守恒不丢行", () => {
+  const tmp = tmpRoot();
+  process.env.WFP_LEDGER_MAX = "3";
+  try {
+    for (let i = 0; i < 8; i += 1) appendLedger(tmp, "feedback.jsonl", { at: `2026-01-0${i + 1}`, text: `f${i}` });
+    const rows = readLines(tmp, "feedback.jsonl");
+    assert.equal(rows.length, 3, "保尾部 3 条");
+    // appendLedger 每次超限即收敛（裁 1 条一份归档），归档按次多份——总量守恒是硬口径
+    const archived = archiveFiles(tmp, "feedback");
+    assert.ok(archived.length >= 1, `归档存在（${archived.length} 份）`);
+    const archRows = archived.flatMap((f) => readLines(tmp, `archive/${f}`)).map((r) => r.text).sort();
+    assert.deepEqual(archRows, ["f0", "f1", "f2", "f3", "f4"], "被裁 5 行全在归档，一条不丢");
+    const state = JSON.parse(fs.readFileSync(path.join(tmp, "stats", "ledger-state.json"), "utf8"));
+    assert.equal(state["feedback.jsonl"].archivedTotal, 5, "累计归档记账");
+    assert.ok(state["feedback.jsonl"].lastArchive.path.includes("archive/"), "最近归档路径可回溯");
+    assert.equal(rows.length + archRows.length, 8, "守恒：账内+归档=裁前总数");
+  } finally {
+    delete process.env.WFP_LEDGER_MAX;
+  }
+});
+
+test("归档有界：超 WFP_LEDGER_ARCHIVE_KEEP 删最旧，不把只增不删搬进 archive/", () => {
+  const tmp = tmpRoot();
+  process.env.WFP_LEDGER_MAX = "2";
+  process.env.WFP_LEDGER_ARCHIVE_KEEP = "2";
+  try {
+    for (let round = 0; round < 4; round += 1) {
+      appendLedger(tmp, "feedback.jsonl", { at: `2026-02-0${round * 2 + 1}`, text: `a${round}` });
+      appendLedger(tmp, "feedback.jsonl", { at: `2026-02-0${round * 2 + 2}`, text: `b${round}` });
+      appendLedger(tmp, "feedback.jsonl", { at: `2026-02-1${round}`, text: `c${round}` }); // 每轮触发一次收敛
+    }
+    const archived = archiveFiles(tmp, "feedback");
+    assert.equal(archived.length, 2, `归档封顶 2 份（实际 ${archived.length}）`);
+  } finally {
+    delete process.env.WFP_LEDGER_MAX;
+    delete process.env.WFP_LEDGER_ARCHIVE_KEEP;
+  }
+});
+
+test("归档失败本轮不裁：数据安全优先，真账原样、note 如实", () => {
+  const tmp = tmpRoot();
+  for (let i = 0; i < 5; i += 1) appendLedger(tmp, "feedback.jsonl", { at: `2026-03-0${i + 1}`, text: `x${i}` });
+  fs.writeFileSync(path.join(tmp, "stats", "archive"), "占位文件：mkdir 必败"); // 归档路径不可写
+  const r = trimLedger(tmp, "feedback.jsonl", 2);
+  assert.equal(r.trimmed, 0, "归档失败不裁");
+  assert.match(r.note, /归档失败本轮不裁/);
+  assert.equal(readLines(tmp, "feedback.jsonl").length, 5, "真账一行不动");
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("WFP_LEDGER_ARCHIVE_KEEP=0 关闭归档：回到旧行为，无 archive/ 产生", () => {
+  const tmp = tmpRoot();
+  process.env.WFP_LEDGER_MAX = "2";
+  process.env.WFP_LEDGER_ARCHIVE_KEEP = "0";
+  try {
+    for (let i = 0; i < 5; i += 1) appendLedger(tmp, "queries.jsonl", { q: `q${i}`, at: `2026-04-0${i + 1}` });
+    assert.equal(readLines(tmp, "queries.jsonl").length, 2);
+    assert.deepEqual(archiveFiles(tmp, "queries"), [], "归档关闭如实无文件");
+  } finally {
+    delete process.env.WFP_LEDGER_MAX;
+    delete process.env.WFP_LEDGER_ARCHIVE_KEEP;
   }
 });
