@@ -2,6 +2,7 @@
   "schema": 1,
   "generatedAt": "2026-10-28",
   "totalDownloads": 0,
+  "tests": 108,
   "plugins": [
     {
       "name": "afk",

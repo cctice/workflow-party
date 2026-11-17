@@ -11,7 +11,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { loadCatalog } from "./market.mjs";
+import { loadCatalog, declaredTests } from "./market.mjs";
 
 const root = process.env.WFP_ROOT ? path.resolve(process.env.WFP_ROOT)
   : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -23,6 +23,9 @@ export function buildSite(repoRoot = root, outDir = path.join(repoRoot, "site"),
     schema: 1,
     generatedAt: fs.statSync(path.join(repoRoot, "stats", "downloads.json")).mtime.toISOString().slice(0, 10),
     totalDownloads: entries.reduce((s, e) => s + e.downloads, 0),
+    // tests 数与 README 徽章同源（十四轮）：declaredTests 单一真源，site-gate 看守
+    // 站点不过期——新增用例不重建站点即红，不再第四处口径漂移。
+    tests: declaredTests(repoRoot),
     plugins: entries.map((e) => ({
       name: e.name,
       version: e.version,

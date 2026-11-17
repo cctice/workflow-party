@@ -249,6 +249,25 @@ const queriesPath = (repoRoot) => path.join(repoRoot, "stats", "queries.jsonl");
 //     report 面如实展示每本账行数/封顶/累计裁剪。
 const LEDGERS = ["events.jsonl", "feedback.jsonl", "queries.jsonl"];
 
+// ---- tests 计数单一真源（十四轮）：README 徽章 / site api / 对账门同源 ----
+// 痛点（十三轮留题）：tests 计数口径散落三处各数各的（sync-badges 本地函数、
+// manifest-sync 门内联重算、site 静态面若内嵌即第四处）——口径一多必漂。
+// 统一收口在此：test/*.test.mjs 顶层 test() 静态声明计数（与门同逻辑）。
+export function declaredTests(repoRoot) {
+  const dir = path.join(repoRoot, "test");
+  let declared = 0;
+  let files = [];
+  try {
+    files = fs.readdirSync(dir).filter((f) => f.endsWith(".test.mjs"));
+  } catch {
+    return 0; // 无 test/ 目录（演练临时根）：如实零声明
+  }
+  for (const file of files) {
+    declared += (fs.readFileSync(path.join(dir, file), "utf8").match(/^test\(/gm) || []).length;
+  }
+  return declared;
+}
+
 export function ledgerMax() {
   const n = Number(process.env.WFP_LEDGER_MAX);
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 5000;
