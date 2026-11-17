@@ -193,3 +193,64 @@ test("WFP_LEDGER_ARCHIVE_KEEP=0 关闭归档：回到旧行为，无 archive/ �
     delete process.env.WFP_LEDGER_ARCHIVE_KEEP;
   }
 });
+
+// ── 归档消费面（十四轮）：归档文件本身有人看，不再人肉 grep ──────────────────
+import { archiveIndex } from "../scripts/market.mjs";
+
+test("archive 清单面：trim 真产归档后 archiveIndex 逐份可读（账名/行数/首末时间）", () => {
+  const tmp = tmpRoot();
+  process.env.WFP_LEDGER_MAX = "2";
+  try {
+    for (let i = 1; i <= 5; i += 1) logQuery(tmp, `审计关键词 q${i}`);
+    const idx = archiveIndex(tmp);
+    // 封顶后每次 append 都触发收敛：5 条封顶 2 → 3 次裁剪各落一份归档、每份 1 行
+    assert.equal(idx.files.length, 3, "逐次收敛逐次落档");
+    assert.ok(idx.files.every((f) => f.ledger === "queries"), "账名从前缀归位");
+    assert.equal(idx.files.reduce((s2, f) => s2 + f.rows, 0), 3, "被裁 3 行全在档");
+    assert.ok(idx.files.every((f) => f.badRows === 0));
+    assert.ok(idx.files.every((f) => f.firstAt && f.lastAt && f.firstAt <= f.lastAt), "首末行时间随行");
+    assert.ok(idx.files.every((f) => f.bytes > 0));
+  } finally {
+    delete process.env.WFP_LEDGER_MAX;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("archive --grep：跨归档检索命中行带出处；不命中如实报空；--ledger 过滤与未知名拒绝", () => {
+  const tmp = tmpRoot();
+  process.env.WFP_LEDGER_MAX = "2";
+  try {
+    for (let i = 1; i <= 4; i += 1) logQuery(tmp, `needle-a q${i}`);
+    const hit = archiveIndex(tmp, { grep: "NEEDLE-A" }); // 大小写不敏感
+    assert.equal(hit.matches.length, 2, "被裁 2 行命中");
+    assert.ok(hit.matches.every((m) => m.file.startsWith("queries-") && m.line.includes("needle-a")), "命中行带出处（哪份归档）");
+    const miss = archiveIndex(tmp, { grep: "不存在的水词" });
+    assert.equal(miss.matches.length, 0);
+    assert.match(miss.note, /no archived rows match/);
+    const only = archiveIndex(tmp, { ledger: "queries" });
+    assert.equal(only.files.length, 2);
+    assert.equal(archiveIndex(tmp, { ledger: "events" }).files.length, 0, "他账如实空");
+    assert.throws(() => archiveIndex(tmp, { ledger: "nope" }), /unknown ledger/);
+  } finally {
+    delete process.env.WFP_LEDGER_MAX;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("archive 坏行不连坐 + 空目录如实：badRows 计数、其余行照常可审计", () => {
+  const tmp = tmpRoot();
+  const dir = path.join(tmp, "stats", "archive");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "feedback-2026-01-02T00-00-00-000Z.jsonl"),
+    JSON.stringify({ at: "2026-01-02T00:00:00Z", plugin: "x", text: "好行" }) + "\n{broken\n");
+  const idx = archiveIndex(tmp);
+  assert.equal(idx.files.length, 1);
+  assert.equal(idx.files[0].rows, 2);
+  assert.equal(idx.files[0].badRows, 1, "坏行如实计数");
+  assert.equal(idx.files[0].lastAt, "2026-01-02T00:00:00Z", "好行时间照常可读");
+  const empty = tmpRoot();
+  assert.equal(archiveIndex(empty).files.length, 0, "无 archive/ 目录如实空");
+  assert.match(archiveIndex(empty).note, /no archives yet/);
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.rmSync(empty, { recursive: true, force: true });
+});

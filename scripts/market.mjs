@@ -289,6 +289,72 @@ function archiveTrimmed(repoRoot, file, trimmedRows) {
 
 const ledgerStatePath = (repoRoot) => path.join(repoRoot, "stats", "ledger-state.json");
 
+// ---- 归档消费面（十四轮）：归档文件本身有人看 ----
+// 痛点（十三轮留题）：trim 被裁行落了 stats/archive/，但消费面为零——审计时
+// 只能人肉 grep archive/*.jsonl。market archive 一条命令读归档：
+//   - 清单面：每份归档（账名/行数/坏行/字节/落档时间/首末行时间）新→旧；
+//   - --ledger <events|feedback|queries> 只看一本账（未知名报错不猜）；
+//   - --grep <text> 跨归档行检索（大小写不敏感子串，原文 JSON 行带出处），
+//     命中封顶 --limit（默认 50）防一屏刷爆，超了如实 truncated；
+//   - 坏行不连坐：单行解析失败计 badRows，别的行照常可审计。
+export function archiveIndex(repoRoot, { ledger, grep, limit = 50 } = {}) {
+  const ledgerNames = LEDGERS.map((l) => l.replace(/\.jsonl$/, "")); // 归档前缀不带扩展名
+  if (ledger && !ledgerNames.includes(ledger)) {
+    throw new Error(`unknown ledger: ${ledger}（可选：${ledgerNames.join(" | ")}）`);
+  }
+  const dir = archiveDir(repoRoot);
+  let names = [];
+  try {
+    names = fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl")).sort().reverse(); // 文件名时间戳倒序 = 新→旧
+  } catch {
+    return { files: [], note: "no archives yet (stats/archive/ 不存在——台账未裁过或归档未开张)" };
+  }
+  if (ledger) names = names.filter((f) => f.startsWith(`${ledger}-`));
+  const needle = grep == null ? null : String(grep).toLowerCase();
+  const files = [];
+  const matches = [];
+  let truncated = false;
+  for (const name of names) {
+    const p = path.join(dir, name);
+    const raw = fs.readFileSync(p, "utf8");
+    const lines = raw.split("\n").filter(Boolean);
+    let badRows = 0;
+    const ats = [];
+    for (const line of lines) {
+      if (needle && line.toLowerCase().includes(needle)) {
+        if (matches.length >= limit) truncated = true;
+        else matches.push({ file: name, line }); // 原文 JSON 行带出处（哪份归档第几笔）
+      }
+      try {
+        const row = JSON.parse(line);
+        if (row && typeof row.at === "string") ats.push(row.at);
+      } catch {
+        badRows += 1; // 坏行如实计数不连坐
+      }
+    }
+    ats.sort();
+    files.push({
+      file: name,
+      ledger: ledgerNames.find((l) => name.startsWith(`${l}-`)) ?? null, // 前缀对不上账名的如实 null
+      rows: lines.length,
+      badRows,
+      bytes: Buffer.byteLength(raw),
+      archivedAt: fs.statSync(p).mtime.toISOString(),
+      firstAt: ats[0] ?? null,
+      lastAt: ats[ats.length - 1] ?? null,
+    });
+  }
+  const result = { files };
+  if (needle != null) {
+    result.grep = String(grep);
+    result.matches = matches;
+    result.truncated = truncated;
+    if (matches.length === 0 && !truncated) result.note = `no archived rows match "${grep}"`;
+  }
+  if (files.length === 0 && needle == null) result.note = `no archives${ledger ? ` for ledger ${ledger}` : ""} yet`;
+  return result;
+}
+
 // ---- 台账写侧并发保护（十三轮）：jsonl"单进程写"假设钉死 ----
 // 痛点：appendLedger/trimLedger/ingestEvents 全是读-改-写裸奔——两进程同时 trim
 // 同一本账理论可交错（半行/重行/丢行），ledger-state.json 也会后写者整体覆盖前写者。
@@ -547,7 +613,7 @@ function parseArgs(argv) {
   const pos = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--json" || a === "--category" || a === "--sort" || a === "--by" || a === "--consumer" || a === "--kind" || a === "--max") {
+    if (a === "--json" || a === "--category" || a === "--sort" || a === "--by" || a === "--consumer" || a === "--kind" || a === "--max" || a === "--ledger" || a === "--grep" || a === "--limit") {
       if (a === "--json") flags.json = true;
       else flags[a.slice(2)] = argv[++i];
     } else pos.push(a);
@@ -632,8 +698,25 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       const archived = r.archived != null ? `，归档 ${r.archived} 行 → ${path.basename(r.archivePath)}` : "";
       console.log(`${r.file}  ${r.before} → ${r.after}（裁 ${r.trimmed}${archived}${r.note ? `，${r.note}` : ""}）`);
     }
+  } else if (cmd === "archive") {
+    // 归档消费面（十四轮）：审计不再人肉 grep archive/*.jsonl。
+    let archive;
+    try {
+      archive = archiveIndex(root, { ledger: flags.ledger, grep: flags.grep, limit: flags.limit ? Number(flags.limit) : 50 });
+    } catch (error) {
+      console.error(error.message);
+      process.exit(1);
+    }
+    if (flags.json) console.log(JSON.stringify(archive, null, 2));
+    else if (archive.grep != null) {
+      archive.matches.forEach((m) => console.log(`[${m.file}] ${m.line}`));
+      console.log(archive.matches.length ? `命中 ${archive.matches.length} 行${archive.truncated ? `（超 --limit 封顶，已截断）` : ""}` : (archive.note || "未命中"));
+    } else {
+      if (!archive.files.length) console.log(archive.note || "(空)");
+      else archive.files.forEach((f) => console.log(`${f.file}  ${f.rows} 行（坏 ${f.badRows}）/ ${f.bytes} B  落档 ${f.archivedAt}${f.lastAt ? `  首末 ${f.firstAt} → ${f.lastAt}` : ""}`));
+    }
   } else {
-    console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N] | record <name> [--consumer c] | ingest | feedback <name> <text> [--kind bug|idea|review] | report [--json] | trim [--max N]");
+    console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N] | record <name> [--consumer c] | ingest | feedback <name> <text> [--kind bug|idea|review] | report [--json] | trim [--max N] | archive [--ledger events|feedback|queries] [--grep <text>] [--limit N] [--json]");
     process.exit(cmd ? 1 : 0);
   }
 }
