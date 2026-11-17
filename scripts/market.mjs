@@ -117,19 +117,23 @@ export function listPlugins(catalog, { category, sort = "downloads" } = {}) {
   return entries;
 }
 
-/** 回填下载量：+by（默认 1），同步 updatedAt；返回新值（未知名 → null） */
+/** 回填下载量：+by（默认 1），同步 updatedAt；返回新值（未知名 → null）
+ *  （十四轮）downloads.json 读-改-写整段持台账锁：与 ingest/record 同一把锁，
+ *  bump 与事件归账并发不再后写者整体覆盖前写者（丢 +N 的丢账）。 */
 export function bumpDownloads(repoRoot, name, by = 1) {
   const index = JSON.parse(fs.readFileSync(path.join(repoRoot, ".claude-plugin", "marketplace.json"), "utf8"));
   const entry = index.plugins.find((p) => p.name === name);
   if (!entry) return null;
-  const statsPath = path.join(repoRoot, "stats", "downloads.json");
-  const stats = JSON.parse(fs.readFileSync(statsPath, "utf8"));
-  const key = `${entry.name}@${entry.version}`;
-  stats.counts[key] = (stats.counts[key] ?? 0) + by;
-  stats.updatedAt = new Date().toISOString().slice(0, 10);
-  fs.mkdirSync(path.dirname(statsPath), { recursive: true });
-  fs.writeFileSync(statsPath, JSON.stringify(stats, null, 2) + "\n");
-  return stats.counts[key];
+  return withLedgerLock(repoRoot, () => {
+    const statsPath = path.join(repoRoot, "stats", "downloads.json");
+    const stats = JSON.parse(fs.readFileSync(statsPath, "utf8"));
+    const key = `${entry.name}@${entry.version}`;
+    stats.counts[key] = (stats.counts[key] ?? 0) + by;
+    stats.updatedAt = new Date().toISOString().slice(0, 10);
+    fs.mkdirSync(path.dirname(statsPath), { recursive: true });
+    fs.writeFileSync(statsPath, JSON.stringify(stats, null, 2) + "\n");
+    return stats.counts[key];
+  });
 }
 
 // ---- 安装事件回传通道（九轮）----

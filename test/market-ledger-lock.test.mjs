@@ -104,3 +104,25 @@ test("陈锁接管：超龄残留锁不卡死后续写", () => {
   assert.ok(!fs.existsSync(lockPath), "接管后锁即释放");
   fs.rmSync(tmp, { recursive: true, force: true });
 });
+
+// ── bumpDownloads 持锁（十四轮）：锁外最后一个读-改-写裸奔点收口 ─────────────
+// 痛点（十三轮留题）：并发保护盖住了 append/trim/record/ingest，但 bump（downloads.json
+// 读改写）仍在锁外——bump 与 ingest 并发 = 后写者整体覆盖前写者，丢 +N 的丢账。
+test("并发 bump×ingest：downloads.json 不丢账（counts 守恒）", async () => {
+  const tmp = tmpRoot();
+  const before = JSON.parse(fs.readFileSync(path.join(tmp, "stats", "downloads.json"), "utf8"));
+  const base = before.counts["kaleidosphere@0.4.2"] ?? 0;
+  const WORKER_BUMP = `import { bumpDownloads } from ${JSON.stringify(MARKET_URL)};
+for (let i = 0; i < 20; i++) bumpDownloads(process.env.WFP_TEST_ROOT, "kaleidosphere", 1);
+`;
+  const WORKER_RECORD = `import { recordInstall } from ${JSON.stringify(MARKET_URL)};
+for (let i = 0; i < 20; i++) recordInstall(process.env.WFP_TEST_ROOT, "kaleidosphere", { consumer: "c" });
+`;
+  await Promise.all([
+    runWorker({ WORKER: WORKER_BUMP, WFP_TEST_ROOT: tmp, WFP_TEST_TAG: "bump" }),
+    runWorker({ WORKER: WORKER_RECORD, WFP_TEST_ROOT: tmp, WFP_TEST_TAG: "record" }),
+  ]);
+  const after = JSON.parse(fs.readFileSync(path.join(tmp, "stats", "downloads.json"), "utf8"));
+  assert.equal(after.counts["kaleidosphere@0.4.2"], base + 40, "20 次 bump + 20 条事件归账一条不丢");
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
