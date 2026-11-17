@@ -3,15 +3,20 @@
 // 痛点（十二轮留题）：README/README_CN 双语 tests-XX%20passing 徽章是静态数字，
 // 每次增删用例都要人记得刷——十轮已有 134→162 没人跟的前科（gatt 仓同病已治）。
 // 口径：
-//   - 权威计数 = test/*.test.mjs 顶层 test() 静态计数（与 manifest-sync 门同源逻辑）；
+//   - 权威计数 = test/*.test.mjs 顶层 test() 静态计数（十四轮收口为 market.mjs
+//     declaredTests 单一真源：README 徽章 / site api tests / 对账门三面同源）；
 //   - 默认真跑 node --test 全绿才刷（红着不粉饰，非零退出如实报）；--no-run 跳过（CI 递归防环/演练）；
 //   - --check 只读对账：徽章≠计数即红，指路 npm run sync:badges；
-//   - 双语同刷同值（README_CN 门继续看守）。
+//   - 双语同刷同值（README_CN 门继续看守）；
+//   - （十四轮）site/api/market.json 的 tests 数一并对账/刷新——站点静态面
+//     不再是徽章数据的第二真相源（漂了同一条命令修）。
 // 用法：node scripts/sync-badges.mjs [--check] [--no-run] [--root DIR]
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { declaredTests } from "./market.mjs";
+import { buildSite } from "./build-site.mjs";
 
 const defaultRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -20,19 +25,19 @@ const noRun = args.includes("--no-run");
 const rootIdx = args.indexOf("--root");
 const root = rootIdx >= 0 ? path.resolve(args[rootIdx + 1]) : defaultRoot;
 
-function declaredTests() {
-  const dir = path.join(root, "test");
-  let declared = 0;
-  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".test.mjs"))) {
-    declared += (fs.readFileSync(path.join(dir, file), "utf8").match(/^test\(/gm) || []).length;
+const siteApiPath = path.join(root, "site", "api", "market.json");
+const siteTests = () => {
+  try {
+    return JSON.parse(fs.readFileSync(siteApiPath, "utf8")).tests ?? null;
+  } catch {
+    return null; // 站点未生成：如实缺席，不逼建
   }
-  return declared;
-}
+};
 
 const badgeValue = (source) => source.match(/badge\/tests-(\d+)%20passing-/)?.[1];
 const setBadge = (source, n) => source.replace(/(badge\/tests-)\d+(%20passing-)/, `$1${n}$2`);
 
-const declared = declaredTests();
+const declared = declaredTests(root);
 const files = ["README.md", "README_CN.md"].map((f) => path.join(root, f));
 const currents = files.map((f) => badgeValue(fs.readFileSync(f, "utf8")));
 
@@ -43,15 +48,18 @@ if (currents.some((c) => c === undefined)) {
 
 if (check) {
   const drifted = currents.filter((c) => Number(c) !== declared);
-  if (drifted.length > 0) {
-    console.error(`[sync-badges] 徽章（${currents.join(", ")}）≠ 用例计数（${declared}）——跑 npm run sync:badges 刷新`);
+  const siteDrifted = siteTests() != null && siteTests() !== declared;
+  if (drifted.length > 0 || siteDrifted) {
+    console.error(`[sync-badges] 徽章（${currents.join(", ")}）≠ 用例计数（${declared}）${siteDrifted ? `；site api tests（${siteTests()}）亦漂` : ""}——跑 npm run sync:badges 刷新`);
     process.exit(1);
   }
-  console.log(`[sync-badges] tests 徽章 ${declared} passing 与用例计数一致`);
+  console.log(`[sync-badges] tests 徽章 ${declared} passing 与用例计数一致${siteTests() != null ? "（site api 同源一致）" : ""}`);
   process.exit(0);
 }
 
-if (currents.every((c) => Number(c) === declared)) {
+const siteNeedsRefresh = siteTests() != null && siteTests() !== declared;
+
+if (currents.every((c) => Number(c) === declared) && !siteNeedsRefresh) {
   console.log(`[sync-badges] tests 徽章已是 ${declared} passing，无需刷`);
   process.exit(0);
 }
@@ -71,5 +79,11 @@ if (!noRun) {
 for (const file of files) {
   const source = fs.readFileSync(file, "utf8");
   fs.writeFileSync(file, setBadge(source, declared));
+}
+// site 静态面（十四轮）：site/api/market.json 已生成且 tests 漂了 → 同一条命令
+// 重建站点（declaredTests 同源，site-gate 漂移门继续看守不过期）。未生成不逼建。
+if (siteNeedsRefresh) {
+  buildSite(root, path.join(root, "site"));
+  console.log(`[sync-badges] site api tests ${siteTests()} → ${declared}（站点已重建，同源）`);
 }
 console.log(`[sync-badges] tests 徽章 ${currents.join("/")} → ${declared} passing（README.md + README_CN.md 双语同刷）`);
