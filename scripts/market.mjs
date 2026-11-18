@@ -14,6 +14,9 @@
 //   node scripts/market.mjs ingest                          # 归账待处理事件（seq 水位幂等，重跑不多记）
 //   node scripts/market.mjs feedback <name> <text> [--kind bug|idea|review]  # 反馈通道（九轮）：脱敏+本地留档+issue 预填
 //   node scripts/market.mjs report [--json]                 # 聚合报表（九轮）：下载量榜/份额/搜索热度
+//   node scripts/market.mjs trim [--max N]                  # 手动收敛三本账（十二轮）：被裁行先归档
+//   node scripts/market.mjs archive [--ledger events|feedback|queries] [--grep <text>] [--live] [--limit N] [--json]
+//                                                           # 归档消费面（十四轮）：--grep 加 --live 跨账+档一体化检索（十五轮）
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -315,24 +318,67 @@ const ledgerStatePath = (repoRoot) => path.join(repoRoot, "stats", "ledger-state
 //   - --ledger <events|feedback|queries> 只看一本账（未知名报错不猜）；
 //   - --grep <text> 跨归档行检索（大小写不敏感子串，原文 JSON 行带出处），
 //     命中封顶 --limit（默认 50）防一屏刷爆，超了如实 truncated；
+//   - --live（十五轮）：grep 口径跨账+档一体化——在账明细行（stats/<账>.jsonl，
+//     审计意义上的"最新段"）一并纳入检索，命中带 source=live|archive 出处，
+//     live 在前（在账=未被裁的最新行，归档=更早被裁的历史行，时间序自然衔接）；
 //   - 坏行不连坐：单行解析失败计 badRows，别的行照常可审计。
-export function archiveIndex(repoRoot, { ledger, grep, limit = 50 } = {}) {
+export function archiveIndex(repoRoot, { ledger, grep, limit = 50, includeLive = false } = {}) {
   const ledgerNames = LEDGERS.map((l) => l.replace(/\.jsonl$/, "")); // 归档前缀不带扩展名
   if (ledger && !ledgerNames.includes(ledger)) {
     throw new Error(`unknown ledger: ${ledger}（可选：${ledgerNames.join(" | ")}）`);
+  }
+  const needle = grep == null ? null : String(grep).toLowerCase();
+  const files = [];
+  const liveFiles = [];
+  const matches = [];
+  let truncated = false;
+  const pushMatch = (source, file, line) => {
+    if (matches.length >= limit) truncated = true;
+    else matches.push({ source, file, line }); // 原文 JSON 行带出处（在账 or 哪份归档）
+  };
+  // 在账明细（live）：最新段先行——账没裁过时它就是全部明细，裁过则是归档的"续篇"
+  if (includeLive) {
+    for (const file of LEDGERS) {
+      if (ledger && file !== `${ledger}.jsonl`) continue;
+      const p = path.join(repoRoot, "stats", file);
+      let raw;
+      try {
+        raw = fs.readFileSync(p, "utf8");
+      } catch {
+        continue; // 未开张的账如实跳过（不冒充空文件）
+      }
+      const lines = raw.split("\n").filter(Boolean);
+      let badRows = 0;
+      const ats = [];
+      for (const line of lines) {
+        if (needle && line.toLowerCase().includes(needle)) pushMatch("live", file, line);
+        try {
+          const row = JSON.parse(line);
+          if (row && typeof row.at === "string") ats.push(row.at);
+        } catch {
+          badRows += 1;
+        }
+      }
+      ats.sort();
+      liveFiles.push({
+        file,
+        ledger: file.replace(/\.jsonl$/, ""),
+        rows: lines.length,
+        badRows,
+        bytes: Buffer.byteLength(raw),
+        firstAt: ats[0] ?? null,
+        lastAt: ats[ats.length - 1] ?? null,
+      });
+    }
   }
   const dir = archiveDir(repoRoot);
   let names = [];
   try {
     names = fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl")).sort().reverse(); // 文件名时间戳倒序 = 新→旧
   } catch {
-    return { files: [], note: "no archives yet (stats/archive/ 不存在——台账未裁过或归档未开张)" };
+    // archive/ 不存在：归档面如实为空（在账 live 面照常可审计，不再整体短路）
   }
   if (ledger) names = names.filter((f) => f.startsWith(`${ledger}-`));
-  const needle = grep == null ? null : String(grep).toLowerCase();
-  const files = [];
-  const matches = [];
-  let truncated = false;
   for (const name of names) {
     const p = path.join(dir, name);
     const raw = fs.readFileSync(p, "utf8");
@@ -340,10 +386,7 @@ export function archiveIndex(repoRoot, { ledger, grep, limit = 50 } = {}) {
     let badRows = 0;
     const ats = [];
     for (const line of lines) {
-      if (needle && line.toLowerCase().includes(needle)) {
-        if (matches.length >= limit) truncated = true;
-        else matches.push({ file: name, line }); // 原文 JSON 行带出处（哪份归档第几笔）
-      }
+      if (needle && line.toLowerCase().includes(needle)) pushMatch("archive", name, line);
       try {
         const row = JSON.parse(line);
         if (row && typeof row.at === "string") ats.push(row.at);
@@ -364,11 +407,17 @@ export function archiveIndex(repoRoot, { ledger, grep, limit = 50 } = {}) {
     });
   }
   const result = { files };
+  if (includeLive) result.liveFiles = liveFiles;
   if (needle != null) {
     result.grep = String(grep);
     result.matches = matches;
     result.truncated = truncated;
-    if (matches.length === 0 && !truncated) result.note = `no archived rows match "${grep}"`;
+    const liveHits = matches.filter((m) => m.source === "live").length;
+    if (matches.length === 0 && !truncated) {
+      result.note = includeLive
+        ? `no rows match "${grep}"（在账+归档）`
+        : `no archived rows match "${grep}"`; // 归档口径原话保留（back-compat）
+    } else if (includeLive) result.hitsBySource = { live: liveHits, archive: matches.length - liveHits };
   }
   if (files.length === 0 && needle == null) result.note = `no archives${ledger ? ` for ledger ${ledger}` : ""} yet`;
   return result;
@@ -632,7 +681,8 @@ function parseArgs(argv) {
   const pos = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--json" || a === "--category" || a === "--sort" || a === "--by" || a === "--consumer" || a === "--kind" || a === "--max" || a === "--ledger" || a === "--grep" || a === "--limit") {
+    if (a === "--live") flags.live = true; // 布尔开关：grep 口径跨账+档一体化（十五轮）
+    else if (a === "--json" || a === "--category" || a === "--sort" || a === "--by" || a === "--consumer" || a === "--kind" || a === "--max" || a === "--ledger" || a === "--grep" || a === "--limit") {
       if (a === "--json") flags.json = true;
       else flags[a.slice(2)] = argv[++i];
     } else pos.push(a);
@@ -719,23 +769,29 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     }
   } else if (cmd === "archive") {
     // 归档消费面（十四轮）：审计不再人肉 grep archive/*.jsonl。
+    // --live（十五轮）：grep 口径跨账+档一体化——在账明细一并纳入。
     let archive;
     try {
-      archive = archiveIndex(root, { ledger: flags.ledger, grep: flags.grep, limit: flags.limit ? Number(flags.limit) : 50 });
+      archive = archiveIndex(root, { ledger: flags.ledger, grep: flags.grep, limit: flags.limit ? Number(flags.limit) : 50, includeLive: Boolean(flags.live) });
     } catch (error) {
       console.error(error.message);
       process.exit(1);
     }
     if (flags.json) console.log(JSON.stringify(archive, null, 2));
     else if (archive.grep != null) {
-      archive.matches.forEach((m) => console.log(`[${m.file}] ${m.line}`));
-      console.log(archive.matches.length ? `命中 ${archive.matches.length} 行${archive.truncated ? `（超 --limit 封顶，已截断）` : ""}` : (archive.note || "未命中"));
+      archive.matches.forEach((m) => console.log(`[${m.source === "live" ? "live:" : "arch:"}${m.file}] ${m.line}`));
+      const parts = [];
+      if (archive.hitsBySource) parts.push(`live ${archive.hitsBySource.live} · 归档 ${archive.hitsBySource.archive}`);
+      console.log(archive.matches.length
+        ? `命中 ${archive.matches.length} 行${parts.length ? `（${parts[0]}）` : ""}${archive.truncated ? "（超 --limit 封顶，已截断）" : ""}`
+        : (archive.note || "未命中"));
     } else {
+      if (archive.liveFiles) archive.liveFiles.forEach((f) => console.log(`[live] ${f.file}  ${f.rows} 行（坏 ${f.badRows}）/ ${f.bytes} B${f.lastAt ? `  首末 ${f.firstAt} → ${f.lastAt}` : ""}`));
       if (!archive.files.length) console.log(archive.note || "(空)");
       else archive.files.forEach((f) => console.log(`${f.file}  ${f.rows} 行（坏 ${f.badRows}）/ ${f.bytes} B  落档 ${f.archivedAt}${f.lastAt ? `  首末 ${f.firstAt} → ${f.lastAt}` : ""}`));
     }
   } else {
-    console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N] | record <name> [--consumer c] | ingest | feedback <name> <text> [--kind bug|idea|review] | report [--json] | trim [--max N] | archive [--ledger events|feedback|queries] [--grep <text>] [--limit N] [--json]");
+    console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N] | record <name> [--consumer c] | ingest | feedback <name> <text> [--kind bug|idea|review] | report [--json] | trim [--max N] | archive [--ledger events|feedback|queries] [--grep <text>] [--live] [--limit N] [--json]");
     process.exit(cmd ? 1 : 0);
   }
 }

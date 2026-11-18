@@ -254,3 +254,35 @@ test("archive 坏行不连坐 + 空目录如实：badRows 计数、其余行照�
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.rmSync(empty, { recursive: true, force: true });
 });
+
+// ── 跨账+档一体化（十五轮）：审计口径不再"归档一套、在账一套" ────────────────
+test("archive --grep --live：在账明细并入检索口径，live 在前归档在后、出处分家、账可过滤", () => {
+  const tmp = tmpRoot();
+  process.env.WFP_LEDGER_MAX = "2";
+  try {
+    // 5 条含 needle 的查询：封顶 2 → 前 3 条被裁进归档、最新 2 条留在账
+    for (let i = 1; i <= 5; i += 1) logQuery(tmp, `一体化 needle q${i}`);
+    const hit = archiveIndex(tmp, { grep: "needle", includeLive: true });
+    assert.equal(hit.matches.length, 5, "在账 2 行 + 归档 3 行一体化全命中");
+    assert.deepEqual(hit.matches.map((m) => m.source), ["live", "live", "archive", "archive", "archive"], "live 在前（最新段），归档随后");
+    assert.ok(hit.matches[0].file === "queries.jsonl" && hit.matches[2].file.startsWith("queries-"), "出处分家：在账=账文件，归档=归档文件");
+    assert.deepEqual(hit.hitsBySource, { live: 2, archive: 3 }, "分家计数可对账");
+    assert.ok(hit.liveFiles?.length === 1 && hit.liveFiles[0].file === "queries.jsonl", "在账清单面随行（未开张的账如实跳过不冒充空文件）");
+    assert.equal(hit.liveFiles[0].rows, 2, "在账行数如实");
+    // 不加 --live 的老口径分毫不动（back-compat 钉死）
+    const archOnly = archiveIndex(tmp, { grep: "needle" });
+    assert.equal(archOnly.matches.length, 3);
+    assert.ok(archOnly.matches.every((m) => m.file.startsWith("queries-")));
+    assert.equal(archOnly.liveFiles, undefined, "live 面不冒出");
+    // --ledger 过滤对 live 同样生效；live+grep 不命中时报空话术区分口径
+    const onlyLive = archiveIndex(tmp, { grep: "needle", includeLive: true, ledger: "queries" });
+    assert.equal(onlyLive.matches.length, 5);
+    const missAll = archiveIndex(tmp, { grep: "不存在的水词", includeLive: true });
+    assert.equal(missAll.matches.length, 0);
+    assert.match(missAll.note, /在账\+归档/);
+    assert.match(archiveIndex(tmp, { grep: "不存在的水词" }).note, /no archived rows match/, "老口径话术保留");
+  } finally {
+    delete process.env.WFP_LEDGER_MAX;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
