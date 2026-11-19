@@ -286,3 +286,69 @@ test("archive --grep --live：在账明细并入检索口径，live 在前归档
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+// ── 检索模式深化（十六轮留题兑现）：--grep 子串 → --regex 正则 / --and 多词 AND ──────
+test("archive --grep --and：多词全子串、与顺序无关、缺一词不命中；--grep --regex：正则解释、坏正则报错不静默", () => {
+  const tmp = tmpRoot();
+  try {
+    logQuery(tmp, "alpha 报错 beta");      // 两词都在（顺序 A）
+    logQuery(tmp, "beta alpha 提醒");      // 两词都在（顺序 B——AND 与顺序无关）
+    logQuery(tmp, "alpha 单词");           // 只有 alpha
+    const dir = path.join(tmp, "stats", "archive");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "queries-2026-01-01T00-00-00-000Z.jsonl"),
+      JSON.stringify({ at: "2026-01-01T00:00:00Z", q: "alpha beta gamma 归档行" }) + "\n");
+
+    // and：在账+归档全纳入，顺序无关，缺词不命中
+    const and = archiveIndex(tmp, { grep: "alpha beta", mode: "and", includeLive: true });
+    assert.equal(and.mode, "and", "模式随行可观测");
+    assert.equal(and.matches.length, 3, "在账 2（两序皆有）+ 归档 1");
+    const andMiss = archiveIndex(tmp, { grep: "alpha 报错 gamma", mode: "and", includeLive: true });
+    assert.equal(andMiss.matches.length, 0, "缺一词即不命中（AND 语义不是 OR）");
+    // 大小写不敏感同 substr 口径
+    const ci = archiveIndex(tmp, { grep: "ALPHA beta", mode: "and" });
+    assert.equal(ci.matches.length, 1, "大小写不敏感");
+
+    // regex：跨行正则、大小写不敏感、顺序敏感（alpha 后必须跟 beta|gamma——
+    // 与 AND 的差异点：AND 无序、regex 由模式自己定序）；坏正则如实报错
+    const re = archiveIndex(tmp, { grep: "alpha.*(beta|gamma)", mode: "regex", includeLive: true });
+    assert.equal(re.mode, "regex");
+    assert.equal(re.matches.length, 2, "在账 1（'beta alpha' 顺序不符不命中——regex 序敏感）+ 归档 1");
+    assert.throws(() => archiveIndex(tmp, { grep: "alpha(", mode: "regex" }), /invalid regex/, "坏正则报错不静默降级子串");
+
+    // back-compat：默认 substr 老口径分毫不动（无 mode 字段、整句子串语义）
+    const legacy = archiveIndex(tmp, { grep: "alpha beta", includeLive: true });
+    assert.equal(legacy.mode, undefined, "substr 默认不标（老消费方零 churn）");
+    assert.equal(legacy.matches.length, 1, "整句 'alpha beta' 只子串命中归档那一行");
+    assert.throws(() => archiveIndex(tmp, { mode: "fuzzy", grep: "x" }), /unknown grep mode/, "未知模式报错不猜");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("archive 检索修饰卫兵：--regex 与 --and 互斥、修饰悬空（无 --grep）报错（真进程实证）", () => {
+  const tmp2 = tmpRoot(); // loadCatalog 先于卫兵跑：临时根带真清单形态防 ENOENT 噪音
+  const run = (args) => {
+    try {
+      const stdout = execFileSync("node", [path.join(root, "scripts", "market.mjs"), "archive", ...args], {
+        encoding: "utf8", env: { ...process.env, WFP_ROOT: tmp2 },
+      });
+      return { code: 0, out: stdout };
+    } catch (err) {
+      return { code: err.status, out: `${err.stdout ?? ""}${err.stderr ?? ""}` };
+    }
+  };
+  try {
+    const both = run(["--grep", "x", "--regex", "--and"]);
+    assert.equal(both.code, 1);
+    assert.match(both.out, /互斥/);
+    const dangling = run(["--regex"]);
+    assert.equal(dangling.code, 1);
+    assert.match(dangling.out, /需与 --grep/);
+    const badRe = run(["--grep", "x(", "--regex"]);
+    assert.equal(badRe.code, 1);
+    assert.match(badRe.out, /invalid regex/);
+  } finally {
+    fs.rmSync(tmp2, { recursive: true, force: true });
+  }
+});
