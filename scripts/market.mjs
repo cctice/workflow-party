@@ -15,6 +15,7 @@
 //   node scripts/market.mjs feedback <name> <text> [--kind bug|idea|review]  # 反馈通道（九轮）：脱敏+本地留档+issue 预填
 //   node scripts/market.mjs report [--json] [--export <file.csv|file.json>]  # 聚合报表（九轮）：下载量榜/份额/搜索热度
 //                                                           # 导出面（十七轮）：JSON=完整报表口径，CSV=榜单表（热度/趋势/台账健康走 JSON）
+//   node scripts/market.mjs ledger [--json]                 # 台账快查（十七轮）：三本账行数/封顶/累计裁剪/累计归档点名——report 内嵌面的单独入口
 //   node scripts/market.mjs trim [--max N]                  # 手动收敛三本账（十二轮）：被裁行先归档
 //   node scripts/market.mjs archive [--ledger events|feedback|queries] [--grep <text>] [--regex] [--and] [--live] [--limit N] [--json]
 //                                                           # 归档消费面（十四轮）：--grep 加 --live 跨账+档一体化检索（十五轮）；
@@ -836,6 +837,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       console.log("台账健康：");
       report.ledgers.forEach((l) => console.log(`  ${l.file}  ${l.lines} 行 / ${l.bytes} B  封顶 ${l.max}  累计裁 ${l.trimmedTotal}  累计归档 ${l.archivedTotal}${l.lastArchive ? `（最近 ${path.basename(l.lastArchive.path)} ${l.lastArchive.rows} 行）` : ""}`));
     }
+  } else if (cmd === "ledger") {
+    // 台账快查（十七轮）：ledgerHealth 单独入口——report 的内嵌面要点名看时不必翻整份报表
+    const ledgers = ledgerHealth(root);
+    if (flags.json) console.log(JSON.stringify(ledgers, null, 2));
+    else ledgers.forEach((l) => console.log(
+      `${l.file}  ${l.lines} 行 / ${l.bytes} B  封顶 ${l.max}  累计裁 ${l.trimmedTotal}${l.lastTrimmedAt ? `（最近 ${l.lastTrimmedAt}）` : ""}  累计归档 ${l.archivedTotal}${l.lastArchive ? `（最近 ${path.basename(l.lastArchive.path)} ${l.lastArchive.rows} 行）` : ""}`,
+    ));
   } else if (cmd === "trim") {
     const max = flags.max ? Number(flags.max) : ledgerMax();
     for (const file of LEDGERS) {
@@ -873,7 +881,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       else archive.files.forEach((f) => console.log(`${f.file}  ${f.rows} 行（坏 ${f.badRows}）/ ${f.bytes} B  落档 ${f.archivedAt}${f.lastAt ? `  首末 ${f.firstAt} → ${f.lastAt}` : ""}`));
     }
   } else {
-    console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N] | record <name> [--consumer c] | ingest | feedback <name> <text> [--kind bug|idea|review] | report [--json] | trim [--max N] | archive [--ledger events|feedback|queries] [--grep <text>] [--regex] [--and] [--live] [--limit N] [--json]");
+    console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N] | record <name> [--consumer c] | ingest | feedback <name> <text> [--kind bug|idea|review] | report [--json] [--export <file.csv|file.json>] | ledger [--json] | trim [--max N] | archive [--ledger events|feedback|queries] [--grep <text>] [--regex] [--and] [--live] [--limit N] [--json]");
     process.exit(cmd ? 1 : 0);
   }
 }

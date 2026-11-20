@@ -352,3 +352,26 @@ test("archive 检索修饰卫兵：--regex 与 --and 互斥、修饰悬空（无
     fs.rmSync(tmp2, { recursive: true, force: true });
   }
 });
+
+// ---- 十七轮：market ledger 快查（report 内嵌面的单独入口） ----
+test("market ledger：三本账点名快查，--json 与 report.ledgers 同源同值（真进程实证）", async () => {
+  const tmp = tmpRoot();
+  try {
+    // 造点真账：一次 record + 一次 feedback + 一次搜索热度，行数/归档面随行
+    execFileSync("node", [path.join(root, "scripts", "market.mjs"), "record", "kaleidosphere"],
+      { encoding: "utf8", env: { ...process.env, WFP_ROOT: tmp } });
+    const run = (args) => execFileSync("node", [path.join(root, "scripts", "market.mjs"), ...args],
+      { encoding: "utf8", env: { ...process.env, WFP_ROOT: tmp } });
+    const text = run(["ledger"]);
+    assert.match(text, /events\.jsonl\s+1 行 \/ \d+ B\s+封顶 5000\s+累计裁 0\s+累计归档 0/);
+    assert.ok(["events.jsonl", "feedback.jsonl", "queries.jsonl"].every((f) => text.includes(f)), "三本账逐一点名");
+    // --json 口径与 report.ledgers 同源（ledgerHealth 单一真源，两个入口零漂移）
+    const { buildReport, loadCatalog } = await import("../scripts/market.mjs");
+    const quick = JSON.parse(run(["ledger", "--json"]));
+    const embedded = buildReport(loadCatalog(tmp), tmp).ledgers;
+    assert.deepEqual(quick, embedded, "快查面 ≡ report 内嵌面（同函数产出的两张嘴说同一话）");
+    assert.equal(quick.find((l) => l.file === "events.jsonl").lines, 1);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
