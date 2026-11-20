@@ -13,7 +13,8 @@
 //   node scripts/market.mjs record <name> [--consumer ks]   # 安装事件回传（九轮）：追加 events.jsonl 并当场归账
 //   node scripts/market.mjs ingest                          # 归账待处理事件（seq 水位幂等，重跑不多记）
 //   node scripts/market.mjs feedback <name> <text> [--kind bug|idea|review]  # 反馈通道（九轮）：脱敏+本地留档+issue 预填
-//   node scripts/market.mjs report [--json]                 # 聚合报表（九轮）：下载量榜/份额/搜索热度
+//   node scripts/market.mjs report [--json] [--export <file.csv|file.json>]  # 聚合报表（九轮）：下载量榜/份额/搜索热度
+//                                                           # 导出面（十七轮）：JSON=完整报表口径，CSV=榜单表（热度/趋势/台账健康走 JSON）
 //   node scripts/market.mjs trim [--max N]                  # 手动收敛三本账（十二轮）：被裁行先归档
 //   node scripts/market.mjs archive [--ledger events|feedback|queries] [--grep <text>] [--regex] [--and] [--live] [--limit N] [--json]
 //                                                           # 归档消费面（十四轮）：--grep 加 --live 跨账+档一体化检索（十五轮）；
@@ -708,6 +709,37 @@ export function buildReport(catalog, repoRoot = root, { topN = 5 } = {}) {
   return { total, zeroDownload: leaderboard.filter((r) => r.downloads === 0).map((r) => r.plugin), leaderboard, heat, trend, ledgers };
 }
 
+// ---- 导出面（十七轮）：报表只在终端滚，落盘给表格工具/下游脚本消费 ----
+// 口径（宁红勿默，与仓内先例同款）：
+//   - 格式按扩展名判定：.json = 完整报表对象（与 --json stdout 同源同值）；
+//     .csv = 榜单表（rank,plugin,downloads,share,versions,bundled）——热度/趋势/
+//     台账健康非表格形态走 JSON，CSV 不硬凑多表；
+//   - 未知扩展名报错退出，不猜默认（用户笔误静默落错格式比报错更贵）；
+//   - tmp+rename 原子落盘（与三本账写侧同款约定），父目录不存在自动建。
+
+const csvCell = (v) => {
+  const s = Array.isArray(v) ? v.join(" ") : String(v ?? "");
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; // RFC4180：引号 doubling，含逗号/换行/引号才加壳
+};
+
+/** 报表落盘：返回 { path, format, rows }；未知扩展名抛错（CLI 转红） */
+export function exportReport(report, outPath) {
+  const ext = path.extname(outPath).toLowerCase();
+  if (ext !== ".csv" && ext !== ".json") {
+    throw new Error(`不认识的导出扩展名 "${ext || "(无)"}"——只支持 .csv（榜单表）/ .json（完整报表），宁报错不猜默认`);
+  }
+  const body = ext === ".csv"
+    ? [["rank", "plugin", "downloads", "share", "versions", "bundled"].join(",")]
+        .concat(report.leaderboard.map((r) => [r.rank, r.plugin, r.downloads, r.share, r.versions.join(" "), r.bundled ? "true" : "false"].map(csvCell).join(",")))
+        .join("\n") + "\n"
+    : JSON.stringify(report, null, 2) + "\n";
+  fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
+  const tmp = `${outPath}.tmp`;
+  fs.writeFileSync(tmp, body);
+  fs.renameSync(tmp, outPath); // 原子落盘：读到的是整份报表或没有，没有半份
+  return { path: outPath, format: ext.slice(1), rows: ext === ".csv" ? report.leaderboard.length : 1 };
+}
+
 // ---- CLI ----
 function parseArgs(argv) {
   const flags = {};
@@ -717,7 +749,7 @@ function parseArgs(argv) {
     if (a === "--live") flags.live = true; // 布尔开关：grep 口径跨账+档一体化（十五轮）
     else if (a === "--regex") flags.regex = true; // 布尔开关：--grep 按正则解释（十六轮）
     else if (a === "--and") flags.and = true; // 布尔开关：--grep 按多词 AND 解释（十六轮）
-    else if (a === "--json" || a === "--category" || a === "--sort" || a === "--by" || a === "--consumer" || a === "--kind" || a === "--max" || a === "--ledger" || a === "--grep" || a === "--limit") {
+    else if (a === "--json" || a === "--category" || a === "--sort" || a === "--by" || a === "--consumer" || a === "--kind" || a === "--max" || a === "--ledger" || a === "--grep" || a === "--limit" || a === "--export") {
       if (a === "--json") flags.json = true;
       else flags[a.slice(2)] = argv[++i];
     } else pos.push(a);
@@ -773,6 +805,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     console.log(`提交 issue：${fb.url}`);
   } else if (cmd === "report") {
     const report = buildReport(catalog, root);
+    if (flags.export != null) {
+      // 导出面（十七轮）：落盘优先于 stdout 渲染——CSV 只导榜单表，JSON 与 --json 同源同值
+      let out;
+      try {
+        out = exportReport(report, flags.export);
+      } catch (err) {
+        console.error(err.message);
+        process.exit(1);
+      }
+      console.log(`已导出 ${out.path}（${out.format}，${out.format === "csv" ? `${out.rows} 行榜单` : "完整报表口径"}）`);
+    }
     if (flags.json) console.log(JSON.stringify(report, null, 2));
     else {
       console.log(`下载总量 ${report.total}（零下载：${report.zeroDownload.join("、") || "无"}）`);
