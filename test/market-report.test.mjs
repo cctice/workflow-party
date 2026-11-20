@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { loadCatalog, buildReport, weeklyTrend, isoWeekKey } from "../scripts/market.mjs";
+import { loadCatalog, buildReport, weeklyTrend, isoWeekKey, exportReport } from "../scripts/market.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -134,4 +134,55 @@ test("report 面带 trend（buildReport 集成）；空账周不断档全 0", ()
   const report = buildReport(loadCatalog(root), root);
   assert.ok(report.trend && report.trend.series.length === 4, 'report 应带 trend 面（默认 4 周）');
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+// ---- 十七轮：报表导出面（--export CSV/JSON 落盘） ----
+
+test("exportReport：CSV=榜单表（RFC4180 转义），JSON=完整报表与 --json 同源同值", () => {
+  const tmp = tmpRoot({ "kfc-plugin@0.1.1": 7, "kaleidosphere@0.4.2": 3 });
+  const report = buildReport(loadCatalog(tmp), tmp);
+  // CSV：榜单表逐行对账（含逗号/引号字段的转义口径由坏字符用例钉死）
+  const csv = exportReport(report, path.join(tmp, "report.csv"));
+  assert.equal(csv.format, "csv");
+  assert.equal(csv.rows, report.leaderboard.length);
+  const lines = fs.readFileSync(csv.path, "utf8").trimEnd().split("\n");
+  assert.equal(lines[0], "rank,plugin,downloads,share,versions,bundled");
+  assert.equal(lines[1], "1,kfc-plugin@0.1.1,7,70,0.1.1:7,false");
+  assert.ok(lines[3].endsWith(",true"), "bundled 列如实带标");
+  // CSV 解析回来行数守恒（表头+3 条目）
+  assert.equal(lines.length, report.leaderboard.length + 1);
+  // JSON：完整报表对象与 buildReport 结果深相等（与 --json stdout 同源同值）
+  const json = exportReport(report, path.join(tmp, "nested", "dir", "report.json"));
+  assert.equal(json.format, "json");
+  assert.deepEqual(JSON.parse(fs.readFileSync(json.path, "utf8")), report, "JSON 导出=完整报表口径，不多不少");
+  // 落盘原子性约定：不留 .tmp 残件
+  assert.ok(!fs.existsSync(`${csv.path}.tmp`) && !fs.existsSync(`${json.path}.tmp`));
+  assert.ok(json.path.includes(path.join("nested", "dir")), "父目录不存在自动建");
+  // RFC4180 转义：合成带逗号/引号的字段（真实清单不会有，但导出器不替数据把关）
+  const nasty = exportReport(
+    { total: 1, zeroDownload: [], leaderboard: [{ rank: 1, plugin: 'p"1,x', downloads: 1, share: 100, versions: ["1,0:1"], bundled: false }], heat: [], trend: null, ledgers: [] },
+    path.join(tmp, "nasty.csv"),
+  );
+  const nastyLines = fs.readFileSync(nasty.path, "utf8").trimEnd().split("\n");
+  assert.equal(nastyLines[1], '1,"p""1,x",1,100,"1,0:1",false', "引号 doubling、含逗号字段加壳");
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("exportReport：未知/无扩展名宁红勿默（exit 1 指路），不猜默认格式", () => {
+  const tmp = tmpRoot({});
+  const report = buildReport(loadCatalog(tmp), tmp);
+  assert.throws(() => exportReport(report, path.join(tmp, "out.txt")), /\.csv（榜单表）\/ \.json（完整报表）/);
+  assert.throws(() => exportReport(report, path.join(tmp, "noext")), /只支持 \.csv/);
+  assert.ok(!fs.existsSync(path.join(tmp, "out.txt")), "拒绝时不落半份文件");
+  // CLI 真进程：坏扩展名 exit 1 + stderr 指路（宁红勿默的进程面）
+  let cli = { code: 0, out: "" };
+  try {
+    execFileSync("node", [path.join(root, "scripts", "market.mjs"), "report", "--export", path.join(tmp, "bad.txt")],
+      { encoding: "utf8", env: { ...process.env, WFP_ROOT: tmp } });
+  } catch (err) {
+    cli = { code: err.status, out: `${err.stdout ?? ""}${err.stderr ?? ""}` };
+  }
+  assert.equal(cli.code, 1, "坏扩展名 CLI exit 1");
+  assert.match(cli.out, /宁报错不猜默认/);
+  fs.rmSync(tmp, { recursive: true, force: true });
 });
