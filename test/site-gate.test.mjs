@@ -78,3 +78,48 @@ test("CLI 冒烟：build-site --check 真实进程跑通", () => {
   const out = execFileSync(process.execPath, [path.join(root, "scripts", "build-site.mjs"), "--check"], { encoding: "utf8" });
   assert.match(out, /静态站点与市场真源一致/);
 });
+
+// 十九轮补：--check 曾是空门+写盘双坏（buildSite 默认 write:true，先写再自比永不红、
+// 工作树被摸脏）。两条真行为钉死：只读（漂了不自动修）+ 漂移真红（exit 1）。
+test("CLI --check 真·只读：站点漂移时不自动重写（漂了就该红给人看，不悄悄修）", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wfp-site-ro-"));
+  fs.mkdirSync(path.join(tmp, ".claude-plugin"), { recursive: true });
+  fs.mkdirSync(path.join(tmp, "stats"), { recursive: true });
+  fs.cpSync(path.join(root, ".claude-plugin", "marketplace.json"), path.join(tmp, ".claude-plugin", "marketplace.json"));
+  fs.cpSync(path.join(root, "stats", "downloads.json"), path.join(tmp, "stats", "downloads.json"));
+  const out = path.join(tmp, "site");
+  buildSite(tmp, out); // 先建一份与真源一致的
+  const tampered = "手改即红探针\n";
+  fs.writeFileSync(path.join(out, "index.html"), tampered); // 模拟 committed 站点被手改/过期
+  let failed = false;
+  try {
+    execFileSync(process.execPath, [path.join(root, "scripts", "build-site.mjs"), "--check", "--out", out], {
+      encoding: "utf8",
+      env: { ...process.env, WFP_ROOT: tmp },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (e) {
+    failed = true;
+    assert.match(String(e.stderr), /站点已过期/, "漂移必须点名而非静默");
+  }
+  assert.ok(failed, "站点漂移 --check 必须 exit 1");
+  assert.equal(fs.readFileSync(path.join(out, "index.html"), "utf8"), tampered, "--check 不得自动重写（只读对账）");
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("确定性·内容源：downloads.json 仅 mtime 变（内容不变）→ 产物字节不变", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wfp-site-mtime-"));
+  fs.mkdirSync(path.join(tmp, ".claude-plugin"), { recursive: true });
+  fs.mkdirSync(path.join(tmp, "stats"), { recursive: true });
+  fs.cpSync(path.join(root, ".claude-plugin", "marketplace.json"), path.join(tmp, ".claude-plugin", "marketplace.json"));
+  fs.cpSync(path.join(root, "stats", "downloads.json"), path.join(tmp, "stats", "downloads.json"));
+  const out = path.join(tmp, "site");
+  buildSite(tmp, out);
+  const before = fs.readFileSync(path.join(out, "api", "market.json"), "utf8");
+  const { utimesSync } = fs;
+  const old = new Date("2020-01-01T00:00:00Z");
+  utimesSync(path.join(tmp, "stats", "downloads.json"), old, old); // 只摸 mtime，内容分毫不动
+  const { files } = buildSite(tmp, out, { write: false });
+  assert.equal(files["api/market.json"], before, "generatedAt 必须内容源（updatedAt），mtime 漂移不进产物");
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
