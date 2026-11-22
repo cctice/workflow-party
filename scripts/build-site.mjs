@@ -21,7 +21,10 @@ export function buildSite(repoRoot = root, outDir = path.join(repoRoot, "site"),
   const entries = [...catalog.entries].sort((a, b) => b.downloads - a.downloads || a.name.localeCompare(b.name));
   const api = {
     schema: 1,
-    generatedAt: fs.statSync(path.join(repoRoot, "stats", "downloads.json")).mtime.toISOString().slice(0, 10),
+    // 快照日期取台账内容字段 updatedAt（内容源，同输入必同字节）——曾用 mtime：
+    // 任何命令摸一下 downloads.json（内容分毫未变）日期就漂，"输出确定性"承诺失真，
+    // 且 committed 站点会被 --check 判过期（十九轮修）。
+    generatedAt: JSON.parse(fs.readFileSync(path.join(repoRoot, "stats", "downloads.json"), "utf8")).updatedAt,
     totalDownloads: entries.reduce((s, e) => s + e.downloads, 0),
     // tests 数与 README 徽章同源（十四轮）：declaredTests 单一真源，site-gate 看守
     // 站点不过期——新增用例不重建站点即红，不再第四处口径漂移。
@@ -145,9 +148,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const args = process.argv.slice(2);
   const outIdx = args.indexOf("--out");
   const outDir = outIdx >= 0 ? path.resolve(args[outIdx + 1]) : path.join(root, "site");
-  const { api, files } = buildSite(root, outDir);
-  if (args.includes("--check")) {
-    // 只对账不写已在上面写了？——check 模式应为只读比较：对已落盘文件逐字节比
+  const check = args.includes("--check");
+  // 十九轮修：--check 真·只读（write:false）——此前 buildSite 默认 write:true，
+  // --check 先写盘再自比：工作树被弄脏 + 比较对象是自己刚写的文件，永不红（空门）。
+  // committed 站点的真保护一直靠 test/site-gate 的 {write:false} 对账，CLI 面现在同口径。
+  const { api, files } = buildSite(root, outDir, { write: !check });
+  if (check) {
     let drift = false;
     for (const [rel, content] of Object.entries(files)) {
       const onDisk = fs.readFileSync(path.join(outDir, rel), "utf8");
