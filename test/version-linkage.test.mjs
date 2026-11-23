@@ -85,3 +85,28 @@ test("field parity: source plugin.json name/description/author match marketplace
     }
   }
 });
+
+// 二十轮补：仓自身版本账本——package.json 与 marketplace metadata.version
+// 自八轮起分叉（0.1.2 vs 0.1.3）十八天无人知，README 徽章跟的是后者，
+// 两个真源各改各的。契约：package.json 是仓版本单一真源，marketplace
+// metadata.version 与双语 README 版本徽章必须同值。
+test("repo version ledger: package.json === marketplace metadata === README badges (EN/CN)", () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  const metaVersion = index.metadata?.version;
+  assert.match(pkg.version ?? "", /^\d+\.\d+\.\d+$/, "package.json version 须为 semver");
+
+  assert.equal(
+    metaVersion,
+    pkg.version,
+    `marketplace metadata.version ${metaVersion} ≠ package.json ${pkg.version}——仓版本真源是 package.json，两处一起改或加本门前的分叉重演`
+  );
+
+  const badgeRe = (v) => new RegExp(`badge/version-${v.replace(/\./g, "\\.")}-`);
+  for (const readme of ["README.md", "README_CN.md"]) {
+    const text = fs.readFileSync(path.join(root, readme), "utf8");
+    assert.ok(
+      badgeRe(pkg.version).test(text),
+      `${readme} 版本徽章未对齐 package.json ${pkg.version}——徽章是给人看的版本面，漂了就是两次 0.1.2/0.1.3 教训重演`
+    );
+  }
+});
