@@ -1,6 +1,6 @@
 {
   "name": "workflow-party",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Personal agent workflow marketplace: index and verified release artifacts for kaleidosphere, kfc-plugin, and afk (bundled-in-kaleidosphere).",
   "license": "MIT",
