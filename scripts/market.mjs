@@ -16,6 +16,7 @@
 //   node scripts/market.mjs report [--json] [--export <file.csv|file.json>]  # 聚合报表（九轮）：下载量榜/份额/搜索热度
 //                                                           # 导出面（十七轮）：JSON=完整报表口径，CSV=榜单表（热度/趋势/台账健康走 JSON）
 //   node scripts/market.mjs ledger [--json]                 # 台账快查（十七轮）：三本账行数/封顶/累计裁剪/累计归档点名——report 内嵌面的单独入口
+//   node scripts/market.mjs doctor [--json]                 # 数据面体检（二十二轮）：键覆盖/坏行/事件序列/水位/账实相符——全程只读，红则 exit 1 逐条点名
 //   node scripts/market.mjs trim [--max N]                  # 手动收敛三本账（十二轮）：被裁行先归档
 //   node scripts/market.mjs archive [--ledger events|feedback|queries] [--grep <text>] [--regex] [--and] [--live] [--limit N] [--json]
 //                                                           # 归档消费面（十四轮）：--grep 加 --live 跨账+档一体化检索（十五轮）；
@@ -613,6 +614,129 @@ export function logQuery(repoRoot, query) {
   appendLedger(repoRoot, "queries.jsonl", { q, at: new Date().toISOString() });
 }
 
+// ---- 数据面体检（二十二轮）：market doctor 一条命令回真话 ----
+// 痛点：账面的完整性只有两处守门——测试门（市场条目下载 key 覆盖门）与写入口校验
+// （record/feedback 拒未知名），账本身被手改/丢账/死引用没有任何 runtime 面点名：
+// report 遇死键静默 continue，坏行靠 topQueries 的 catch 吞掉，坏了没人知道。
+// doctor 全程只读，逐项检查宁红勿默（任何红 → ok:false，CLI exit 1）：
+//   ① marketplace.manifest：清单可读 + name 唯一 + integrity 形态（sha256:<64hex>）；
+//   ② downloads.key-coverage：死键（插件名已不在市场）与缺键（非 bundled 条目无 key）
+//      双向点名；旧版本 key（名在场、版本已退役）是历史账如实列出不冒红；
+//   ③ ledger.rows-parsable：三本账逐行 JSON 可解析，坏行（文件:行号）点名不连坐；
+//   ④ events.sequence：seq 沿文件严格递增（重复/倒退=锁失效或手改）+ foldedSeq 水位
+//      ≤ 最大 seq（超水位=折叠了不存在的事件）+ 未归账 install（seq>水位）点名指路
+//      market ingest（record 当场归账，稳态应为 0）；
+//   ⑤ downloads.counts-vs-events：每个 key 的已折叠 install 数 ≤ counts——bump 只会加，
+//      低于即丢账/手改（裁剪只裁已归账旧事件，不变量存活）。
+export function doctorMarket(repoRoot = root) {
+  const checks = [];
+  const push = (id, findings, note, extra = {}) =>
+    checks.push({ id, ok: findings.length === 0, findings, note, ...extra });
+
+  // ① 市场清单结构（后续检查的前提；读不了整单红，不装死）
+  const manifestFindings = [];
+  let index = null;
+  try {
+    index = JSON.parse(fs.readFileSync(path.join(repoRoot, ".claude-plugin", "marketplace.json"), "utf8"));
+    const names = index.plugins.map((p) => p.name);
+    for (const name of new Set(names.filter((n, i) => names.indexOf(n) !== i))) {
+      manifestFindings.push({ kind: "duplicate-name", name });
+    }
+    for (const p of index.plugins) {
+      if (p.integrity != null && !/^sha256:[0-9a-f]{64}$/.test(p.integrity)) {
+        manifestFindings.push({ kind: "malformed-integrity", name: p.name, integrity: p.integrity });
+      }
+    }
+  } catch (error) {
+    manifestFindings.push({ kind: "unreadable", reason: error.message });
+  }
+  push("marketplace.manifest", manifestFindings, "清单可读 / name 唯一 / integrity 形态 sha256:<64hex>");
+
+  const knownKeys = new Set(index ? index.plugins.map((p) => `${p.name}@${p.version}`) : []);
+  const knownNames = new Set(index ? index.plugins.map((p) => p.name) : []);
+  const nonBundled = index ? index.plugins.filter((p) => !p["bundled-in-kaleidosphere"]) : [];
+
+  // ② 下载台账键覆盖（双向）——counts 缺文件时红，此后账实检查按 0 计
+  const dlFindings = [];
+  const historicalKeys = [];
+  let counts = {};
+  let foldedSeq = 0;
+  try {
+    const stats = JSON.parse(fs.readFileSync(path.join(repoRoot, "stats", "downloads.json"), "utf8"));
+    counts = stats.counts || {};
+    foldedSeq = stats.foldedSeq ?? 0;
+  } catch {
+    dlFindings.push({ kind: "unreadable", file: "stats/downloads.json" });
+  }
+  for (const key of Object.keys(counts)) {
+    const name = key.split("@")[0];
+    if (!knownNames.has(name)) dlFindings.push({ kind: "dead-key", key, reason: "插件名已不在市场" });
+    else if (!knownKeys.has(key)) historicalKeys.push(key); // 旧版本历史账：在场如实列出不冒红
+  }
+  for (const p of nonBundled) {
+    const key = `${p.name}@${p.version}`;
+    if (!(key in counts)) dlFindings.push({ kind: "missing-key", key, reason: "非 bundled 条目台账无 key（覆盖门同口径）" });
+  }
+  push("downloads.key-coverage", dlFindings, "死键（名已下架）/缺键（非 bundled 条目无 key）双向对账", { historicalKeys });
+
+  // ③ 三本账逐行可解析 + 收集事件（文件未开张如实跳过）
+  const events = [];
+  const rowFindings = [];
+  for (const file of LEDGERS) {
+    let raw;
+    try { raw = fs.readFileSync(path.join(repoRoot, "stats", file), "utf8"); } catch { continue; }
+    raw.split("\n").forEach((line, i) => {
+      if (!line.trim()) return;
+      try {
+        const row = JSON.parse(line);
+        if (file === "events.jsonl") events.push(row);
+      } catch (error) {
+        rowFindings.push({ kind: "bad-row", file, line: i + 1, reason: error.message });
+      }
+    });
+  }
+  push("ledger.rows-parsable", rowFindings, "三本账逐行 JSON 可解析（坏行点名不连坐）");
+
+  // ④ 事件序列与水位
+  const seqFindings = [];
+  let prevSeq = 0;
+  let maxSeq = 0;
+  for (const e of events) {
+    const seq = Number(e.seq) || 0;
+    if (seq <= prevSeq) {
+      seqFindings.push({ kind: seq === prevSeq ? "duplicate-seq" : "non-monotonic-seq", seq, prev: prevSeq, at: e.at ?? null });
+    }
+    prevSeq = seq;
+    maxSeq = Math.max(maxSeq, seq);
+  }
+  if (events.length > 0 && foldedSeq > maxSeq) {
+    seqFindings.push({ kind: "watermark-beyond-events", foldedSeq, maxSeq, reason: "折叠水位超过账内最大 seq——事件账与下载台账脱节" });
+  }
+  const pending = events.filter((e) => e.type === "install" && (Number(e.seq) || 0) > foldedSeq);
+  for (const e of pending) {
+    seqFindings.push({ kind: "pending-install", seq: e.seq, plugin: `${e.plugin}@${e.version}`, hint: "node scripts/market.mjs ingest" });
+  }
+  push("events.sequence", seqFindings, "seq 严格递增 / 水位 ≤ 最大 seq / 未归账 install 稳态为 0");
+
+  // ⑤ 账实相符：已折叠 install 数 ≤ counts（bump 只会加，低于即丢账）
+  const foldedCounts = new Map();
+  for (const e of events) {
+    if (e.type !== "install" || (Number(e.seq) || 0) > foldedSeq) continue;
+    const key = `${e.plugin}@${e.version}`;
+    foldedCounts.set(key, (foldedCounts.get(key) ?? 0) + 1);
+  }
+  const driftFindings = [];
+  for (const [key, n] of foldedCounts) {
+    if ((counts[key] ?? 0) < n) {
+      driftFindings.push({ kind: "counts-below-folded", key, counts: counts[key] ?? 0, folded: n });
+    }
+  }
+  push("downloads.counts-vs-events", driftFindings, "每个 key 已折叠 install 数 ≤ 台账计数（低于=丢账/手改）");
+
+  const red = checks.filter((c) => !c.ok).length;
+  return { ok: red === 0, checks, summary: { checks: checks.length, red, green: checks.length - red } };
+}
+
 function topQueries(repoRoot, limit = 5) {
   let lines = [];
   try { lines = fs.readFileSync(queriesPath(repoRoot), "utf8").split("\n").filter(Boolean); } catch { return []; }
@@ -880,8 +1004,23 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       if (!archive.files.length) console.log(archive.note || "(空)");
       else archive.files.forEach((f) => console.log(`${f.file}  ${f.rows} 行（坏 ${f.badRows}）/ ${f.bytes} B  落档 ${f.archivedAt}${f.lastAt ? `  首末 ${f.firstAt} → ${f.lastAt}` : ""}`));
     }
+  } else if (cmd === "doctor") {
+    // 数据面体检（二十二轮）：全程只读——红则 exit 1 逐条点名，绿则如实全绿
+    const result = doctorMarket(root);
+    if (flags.json) console.log(JSON.stringify(result, null, 2));
+    else {
+      for (const c of result.checks) {
+        console.log(`${c.ok ? "✓" : "✗"} ${c.id}  ${c.note ?? ""}`);
+        if (c.historicalKeys?.length) console.log(`    历史版本 key（在场如实列出，不冒红）：${c.historicalKeys.join("、")}`);
+        for (const f of c.findings) console.log(`    ${JSON.stringify(f)}`);
+      }
+      console.log(result.ok
+        ? `体检通过：${result.summary.green}/${result.summary.checks} 项全绿`
+        : `体检不过：${result.summary.red}/${result.summary.checks} 项红——逐条见上，宁红勿默`);
+    }
+    if (!result.ok) process.exit(1);
   } else {
-    console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N] | record <name> [--consumer c] | ingest | feedback <name> <text> [--kind bug|idea|review] | report [--json] [--export <file.csv|file.json>] | ledger [--json] | trim [--max N] | archive [--ledger events|feedback|queries] [--grep <text>] [--regex] [--and] [--live] [--limit N] [--json]");
+    console.log("用法：market list [--category c] [--sort name|downloads] | search <q> | info <name> | stats | bump <name> [--by N] | record <name> [--consumer c] | ingest | feedback <name> <text> [--kind bug|idea|review] | report [--json] [--export <file.csv|file.json>] | ledger [--json] | doctor [--json] | trim [--max N] | archive [--ledger events|feedback|queries] [--grep <text>] [--regex] [--and] [--live] [--limit N] [--json]");
     process.exit(cmd ? 1 : 0);
   }
 }
